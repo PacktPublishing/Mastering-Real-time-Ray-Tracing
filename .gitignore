@@ -1,0 +1,17 @@
+
+*.exe
+*.tlog
+*.idb
+*.pdb
+*.exp
+*.ilk
+*.lib
+*.bmp
+*.obj
+*.deps
+*.log
+*.cache
+.vs/MasteringRealTimeRayTracing/v15/.suo
+.vs/MasteringRealTimeRayTracing/v15/Browse.VC.db
+*.opendb
+*.ipch
