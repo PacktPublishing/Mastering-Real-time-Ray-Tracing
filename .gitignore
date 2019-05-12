@@ -15,3 +15,5 @@
 .vs/MasteringRealTimeRayTracing/v15/Browse.VC.db
 *.opendb
 *.ipch
+*.iobj
+*.ipdb

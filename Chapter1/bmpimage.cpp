@@ -69,7 +69,7 @@ void Ray_BMPSaver::Save(const char* Filename, int32_t Width, int32_t Height, int
 		float blue   = Data[i*3+2] * 255.99f;
 
 		//Pixel format must be in the formm BGR not RGB for bmp to work
-		uint8_t color[3] = { static_cast<uint32_t>(floor(blue)),static_cast<uint32_t>(floor(green)), static_cast<uint32_t>(floor(red))};
+		uint8_t color[3] = { static_cast<uint8_t>(floor(blue)),static_cast<uint8_t>(floor(green)), static_cast<uint8_t>(floor(red))};
 
 		fwrite(color, 1, 3, OutFile);
 	}
