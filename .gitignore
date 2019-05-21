@@ -17,3 +17,6 @@
 *.ipch
 *.iobj
 *.ipdb
+*.db
+*.db-shm
+*.db-wal
