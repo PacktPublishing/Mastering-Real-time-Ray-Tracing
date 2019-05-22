@@ -80,7 +80,7 @@ void Ray_BMPSaver::Save(const char* Filename, int32_t Width, int32_t Height, int
 
 }
 
-float* Ray_BMPSaver::Load(const char* Filename)
+float* Ray_BMPSaver::Load(const char* Filename, int32_t& Width, int32_t& Height)
 {
 	FILE   *InFile = nullptr;
 
@@ -107,8 +107,8 @@ float* Ray_BMPSaver::Load(const char* Filename)
 	fclose(InFile);
 
 	//Read image resolution info
-	uint32_t Width = (BmpInfoHeader[7] << 24) | (BmpInfoHeader[6] << 16) | (BmpInfoHeader[5] << 8) | BmpInfoHeader[4];
-	uint32_t Height = (BmpInfoHeader[11] << 24) | (BmpInfoHeader[10] << 16) | (BmpInfoHeader[9] << 8) | BmpInfoHeader[8];
+	Width = (BmpInfoHeader[7] << 24) | (BmpInfoHeader[6] << 16) | (BmpInfoHeader[5] << 8) | BmpInfoHeader[4];
+	Height = (BmpInfoHeader[11] << 24) | (BmpInfoHeader[10] << 16) | (BmpInfoHeader[9] << 8) | BmpInfoHeader[8];
 
 	const uint32_t Resolution = Width * Height;
 	size_t UNORMImagePixels = 3 * Resolution;
@@ -119,9 +119,9 @@ float* Ray_BMPSaver::Load(const char* Filename)
 	for (uint32_t i = 0; i < Resolution; ++i)
 	{
 		uint32_t Offset = i * 3;
-		UNORMImageData[i]     = static_cast<float>(ImageData[i + 2]) * Temp;
-		UNORMImageData[i + 1] = static_cast<float>(ImageData[i + 1]) * Temp;
-		UNORMImageData[i + 2] = static_cast<float>(ImageData[i])     * Temp;
+		UNORMImageData[Offset]     = static_cast<float>(ImageData[Offset + 2]) * Temp;
+		UNORMImageData[Offset + 1] = static_cast<float>(ImageData[Offset + 1]) * Temp;
+		UNORMImageData[Offset + 2] = static_cast<float>(ImageData[Offset])     * Temp;
 	}
 
 

@@ -10,5 +10,5 @@ public:
 
 	static void Save(const char* Filename,  int32_t Width,int32_t Height,int32_t dpi, float* Data);
 
-	static float* Load(const char* Filename);
+	static float* Load(const char* Filename, int32_t& Width, int32_t& Height);
 };
