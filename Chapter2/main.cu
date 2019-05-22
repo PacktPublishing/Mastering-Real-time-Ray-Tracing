@@ -19,6 +19,7 @@ static void Check(cudaError_t result, char const *const func, const char *const 
 	}
 }
 
+//Here we overload few useful math functions/operators in order to use them in our filter kernel
 __device__ float3 operator+(const float3 &a, const float3 &b) {
 
 	return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
@@ -60,25 +61,25 @@ __device__ int Min(int a, int b)
 	return a < b ? a : b;
 }
 
-__device__ __constant__ const int kFilterRadius = 25;
-__device__ __constant__ const float FilterWeights[kFilterRadius] = { 0,	0,	0.000001,	0.00001,	0.000078,	0.000489,	0.002403,	0.009245,	0.027835,	0.065591f,	0.120978,	0.174666,	0.197413,	0.174666,	0.120978,	0.065591,	0.027835,	0.009245,	0.002403,	0.000489,	0.000078,	0.00001,	0.000001,	0,	0 };
+__constant__ const int kFilterRadius = 25;
+__constant__ const float FilterWeights[25] = { 0.f,	0.f,	0.000001f,	0.00001f,	0.000078f,	0.000489f,	0.002403f,	0.009245f,	0.027835f,	0.065591f,	0.120978f,	0.174666f,	0.197413f,	0.174666f,	0.120978f,	0.065591f,	0.027835f,	0.009245f,	0.002403f,	0.000489f,	0.000078f,	0.00001f,	0.000001f,	0.f,	0.f };
 
 //the keyword __global__ instructs the CUDA compiler that this function is the entry point of our kernel
 __global__ void FilterImageKernel(float* ColorBuffer
-	                            , const int Width	                                                      
+	                            , const int Width	
+	                            , const int Height
 	                            , float* FilteredColorBuffer)
 {
 	//shared memory 
 	__shared__ float3 CachedColors[512];
-
-
+	
 	//Compute global x and t coords
 	int x = blockIdx.x*blockDim.x + threadIdx.x;
 	int y = blockIdx.y*blockDim.y + threadIdx.y;
 
 	//checks whether we are inside the color buffer bounds.
     //If not, just return
-	if (x >= Width || y >= Width)
+	if (x >= Width || y >= Height)
 	{
 		return;
 	}
@@ -94,11 +95,6 @@ __global__ void FilterImageKernel(float* ColorBuffer
 	//wait for all the threads in the block to finish their memory transactions before accessing any value store in CachedColors
 	__syncthreads();
 
-	//FilteredColorBuffer[ColorBufferOffset] = CachedColors[threadIdx.x].x;
-	//FilteredColorBuffer[ColorBufferOffset + 1] = CachedColors[threadIdx.x].y;
-	//FilteredColorBuffer[ColorBufferOffset + 2] = CachedColors[threadIdx.x].z;
-
-	//return;
 
 	//Add filter code here
 	int OffsetThreadId = threadIdx.x - kFilterRadius / 2;
@@ -142,8 +138,7 @@ int main()
 
 	//Let's define the compute dimention domain
 	dim3 ThreadBlocks(NumOfBlockX, NumOfBlockY);
-	dim3 ThreadsInABlock(ThreadBlockSizeX, ThreadBlockSizeY);
-
+	dim3 ThreadsInABlock(ThreadBlockSizeX, ThreadBlockSizeY);	
 
 	//Color buffer size in bytes
 	const size_t kColorBufferSize = sizeof(float) * 3 * ImageWidth*ImageHeight;
@@ -157,14 +152,14 @@ int main()
 	memcpy(ColorBuffer, ImageData, kColorBufferSize);
 
 	//Perform horizontal blur pass
-	FilterImageKernel << <ThreadBlocks, ThreadsInABlock >> > (ColorBuffer, ImageWidth,IntermediateResults);
+	FilterImageKernel << <ThreadBlocks, ThreadsInABlock >> > (ColorBuffer, ImageWidth, ImageHeight,IntermediateResults);
 
 	//Wait for the GPU to finish before to access results of the previous pass
 	CHECK_CUDA_ERRORS(cudaGetLastError());
 	CHECK_CUDA_ERRORS(cudaDeviceSynchronize());
 
 	//Perform vertical blur pass
-	FilterImageKernel << <ThreadBlocks, ThreadsInABlock >> > (IntermediateResults, ImageWidth, ColorBuffer);
+	FilterImageKernel << <ThreadBlocks, ThreadsInABlock >> > (IntermediateResults, ImageWidth, ImageHeight, ColorBuffer);
 
 	//Wait for the GPU to finish before to access results of the final pass
 	CHECK_CUDA_ERRORS(cudaGetLastError());
