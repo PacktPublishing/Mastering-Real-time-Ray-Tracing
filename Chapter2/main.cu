@@ -1,7 +1,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-#include "bmpimage.h"
+#include "../Utils/bmpimage.h"
 
 #include <stdio.h>
 #include <iostream>
@@ -130,7 +130,7 @@ int main()
 
 
 	//Load an bmp image
-	float* ImageData = Ray_BMPSaver::Load("flower.bmp", ImageWidth, ImageHeight);
+	float* ImageData = Ray_BMP_Manager::Load("flower.bmp", ImageWidth, ImageHeight);
 
 	//Number of thread blocks
 	int NumOfBlockX = ImageWidth / ThreadBlockSizeX;
@@ -142,7 +142,6 @@ int main()
 
 	//Color buffer size in bytes
 	const size_t kColorBufferSize = sizeof(float) * 3 * ImageWidth*ImageHeight;
-
 
 	//We allocate our color buffer in Unified Memory such that it'll be easy for us to access it on the host as well as on the device
 	CHECK_CUDA_ERRORS(cudaMallocManaged(&ColorBuffer, kColorBufferSize));
@@ -171,7 +170,7 @@ int main()
 	//We are ready to use the results produced on the GPU
 	//Dump Results on a file 
 	const int dpi = 72;
-	Ray_BMPSaver::Save("Chapter2_CudaResult.bmp", ImageWidth, ImageHeight, dpi, (float*)ColorBuffer);
+	Ray_BMP_Manager::Save("Chapter2_CudaResult.bmp", ImageWidth, ImageHeight, dpi, (float*)ColorBuffer);
 
 	//Done! Free up cuda allocated memory
 	CHECK_CUDA_ERRORS(cudaFree(IntermediateResults));

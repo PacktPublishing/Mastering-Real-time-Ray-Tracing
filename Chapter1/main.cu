@@ -2,7 +2,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-#include "bmpimage.h"
+#include "../Utils/bmpimage.h"
 
 #include <stdio.h>
 #include <iostream>
@@ -84,7 +84,7 @@ int main()
 	//We are ready to use the results produced on the GPU
 	//Dump Results on a file 
 	const int dpi = 72;
-	Ray_BMPSaver::Save("Chapter1_CudaResult.bmp", ScreenWidth, ScreenHeight, dpi, (float*)ColorBuffer);
+	Ray_BMP_Manager::Save("Chapter1_CudaResult.bmp", ScreenWidth, ScreenHeight, dpi, (float*)ColorBuffer);
 
 	//Done! Free up cuda allocated memory
 	CHECK_CUDA_ERRORS(cudaFree(ColorBuffer));
