@@ -9,5 +9,7 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="RayPCH.cpp" />
+    <ClCompile Include="RayWin32Application.cpp" />
+    <ClCompile Include="RaySample.cpp" />
   </ItemGroup>
 </Project>
