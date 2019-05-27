@@ -5,11 +5,13 @@
     <ClInclude Include="RaySample.h" />
     <ClInclude Include="d3dx12.h" />
     <ClInclude Include="RayPCH.h" />
+    <ClInclude Include="RayDX12HelloWorldSample.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="RayPCH.cpp" />
     <ClCompile Include="RayWin32Application.cpp" />
     <ClCompile Include="RaySample.cpp" />
+    <ClCompile Include="RayDX12HelloWorldSample.cpp" />
   </ItemGroup>
 </Project>
