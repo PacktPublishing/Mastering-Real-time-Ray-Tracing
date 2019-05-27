@@ -21,3 +21,4 @@
 *.db-shm
 *.db-wal
 *.enc
+*.pch
