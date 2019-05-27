@@ -11,6 +11,22 @@ public:
 
 	virtual ~Ray_Sample();
 
+	virtual void OnInit() = 0;
+
+	virtual void OnUpdate(float DeltaFrame) = 0;
+
+	virtual void OnRender() = 0;
+
+	virtual void OnDestroy() = 0;
+
+	u32 GetWidth() const { return mWidth; }
+ 
+	u32 GetHeight() const { return mHeight;  }
+
+	const wchar_t* GetSampleName() const { return mSampleName.c_str(); }
+
+	void ResizeWindow(u32 ClientWidth, u32 ClientHeight);
+		 
 protected:
 
 	/** Viewport relevant data members */
