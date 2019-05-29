@@ -121,6 +121,7 @@
   <ItemGroup>
     <ClInclude Include="d3dx12.h" />
     <ClInclude Include="RayDX12HelloWorldSample.h" />
+    <ClInclude Include="RayIHardwareRenderer.h" />
     <ClInclude Include="RayPCH.h" />
     <ClInclude Include="RaySample.h" />
     <ClInclude Include="RayWin32Application.h" />

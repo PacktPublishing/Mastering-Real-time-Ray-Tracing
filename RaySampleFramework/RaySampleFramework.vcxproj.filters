@@ -6,6 +6,7 @@
     <ClInclude Include="d3dx12.h" />
     <ClInclude Include="RayPCH.h" />
     <ClInclude Include="RayDX12HelloWorldSample.h" />
+    <ClInclude Include="RayIHardwareRenderer.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
