@@ -49,6 +49,7 @@ protected:
 
 private:
 
+	//convenient name alias for verbose microsoft WRL ComPtr object
 	template<typename T>
 	using ComPtr = Microsoft::WRL::ComPtr<T>;
 
@@ -65,6 +66,8 @@ private:
 	/** A description of the graphics adapter       */
 	std::wstring mAdapterDescription;
 
+
+
 	/** D3D12 Device */
 	ComPtr<ID3D12Device> mD3DDevice;
 
@@ -79,6 +82,57 @@ private:
 
 
 
+	/** DXGI Factory used to create swap chain objects */
+	ComPtr<IDXGIFactory4>               mDXGIFactory;
+
+	/** Actua swap chain interface */
+	ComPtr<IDXGISwapChain3>             mSwapChain;
+
+	/** Render targets allocated to hold swap chains triple buffers */
+	ComPtr<ID3D12Resource>              mRenderTargets[kMAX_BACK_BUFFER_COUNT];
+	
+	/** Depth stencil render target */
+	ComPtr<ID3D12Resource>              mDepthStencil;
+
+
+
+	/** Fence objects used to manage presentation */
+	ComPtr<ID3D12Fence> mFence;
+
+	/** Related fence values*/
+	u64 mFenceValues[kMAX_BACK_BUFFER_COUNT];
+
+	/** Fence event */
+	Microsoft::WRL::Wrappers::Event mFenceEvent;
+
+
+
+	/** Heap descriptor used to allocate memory for swap-chain render targets */
+	ComPtr<ID3D12DescriptorHeap> mRTVDescriptorHeap;
+
+	/** Heap descriptor used to allocate memory for depth stencil render targets */
+	ComPtr<ID3D12DescriptorHeap> mDSVDescriptorHeap;
+
+	/** Heap descriptor size for render targets */
+	u32 mRTVDescriptorSize;
+
+	/** Screen viewport */
+	D3D12_VIEWPORT mViewport;
+
+	/** Scissor rect */
+	D3D12_RECT  mScissorRect;
+
+	/** The pixel format of the back buffer */
+	DXGI_FORMAT mBackBufferFormat;
+
+	/**  The pixel format of the depth buffer */
+	DXGI_FORMAT mDepthBufferFormat;
+
+	/** The number of back buffer held by the swap-chain */
+	u32 mBackBufferCount;
+
+	/** The minimum D3D feature level we must support  */
+	D3D_FEATURE_LEVEL mD3DMinFeatureLevel;
 
 	///////////////////////////////////////////////////////////
 
