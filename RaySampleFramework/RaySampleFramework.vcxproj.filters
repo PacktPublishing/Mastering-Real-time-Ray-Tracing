@@ -7,6 +7,8 @@
     <ClInclude Include="RayPCH.h" />
     <ClInclude Include="RayDX12HelloWorldSample.h" />
     <ClInclude Include="RayIHardwareRenderer.h" />
+    <ClInclude Include="RayDX12HardwareRenderer.h" />
+    <ClInclude Include="FrameManager.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
@@ -14,5 +16,6 @@
     <ClCompile Include="RayWin32Application.cpp" />
     <ClCompile Include="RaySample.cpp" />
     <ClCompile Include="RayDX12HelloWorldSample.cpp" />
+    <ClCompile Include="RayDX12HardwareRenderer.cpp" />
   </ItemGroup>
 </Project>

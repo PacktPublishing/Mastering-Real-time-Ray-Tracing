@@ -16,6 +16,7 @@
 #include <wrl.h>
 #include <shellapi.h>
 #include <memory>
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 #include <atlbase.h>
@@ -39,6 +40,14 @@
 #include <dxgidebug.h>
 #endif
 
+#if defined(min)
+#undef min
+#endif
+
+#if defined(max)
+#undef max
+#endif
+
 
 //Basic multiplatform types redefinition
 typedef int8_t   i8;
@@ -50,3 +59,6 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
+
+//Useful macro for unused parameters
+#define UNUSED_PARAMETER(x) ((void)(x))

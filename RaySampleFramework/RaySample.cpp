@@ -24,5 +24,9 @@ void Ray_Sample::ResizeWindow(u32 ClientWidth, u32 ClientHeight)
 	mWidth = ClientWidth;
 	mHeight = ClientHeight;
 	mAspectRatio = static_cast<float>(ClientWidth) / static_cast<float>(ClientHeight);
+	if (mHardwareRenderer)
+	{
+		mHardwareRenderer->Resize(mWidth, mHeight);
+	}
 }
 
