@@ -17,30 +17,35 @@ RECT Ray_Win32Application::mWindowRect;
 //Frame manager is used only in this translation unit
 static FrameManager gFrameManager;
 
-//void ParseCommandLineArguments()
-//{
-//	int32_t argc;
-//	wchar_t** argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
-//
-//	for (int32_t i = 0; i < argc; ++i)
-//	{
-//		if (::wcscmp(argv[i], L"-w") == 0 || ::wcscmp(argv[i], L"--width") == 0)
-//		{
-//			gClientWidth = ::wcstol(argv[++i], nullptr, 10);
-//		}
-//		if (::wcscmp(argv[i], L"-h") == 0 || ::wcscmp(argv[i], L"--height") == 0)
-//		{
-//			gClientHeight = ::wcstol(argv[++i], nullptr, 10);
-//		}
-//		if (::wcscmp(argv[i], L"-warp") == 0 || ::wcscmp(argv[i], L"--warp") == 0)
-//		{
-//			gUseWarp = true;
-//		}
-//	}
-//
-//	// Free memory allocated by CommandLineToArgvW
-//	::LocalFree(argv);
-//}
+static void ParseCommandLineArguments(Ray_Sample* InRaySample)
+{
+	if (InRaySample)
+	{
+		int32_t argc;
+		wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+
+		for (int32_t i = 0; i < argc; ++i)
+		{
+			if (wcscmp(argv[i], L"-w") == 0 || wcscmp(argv[i], L"--width") == 0)
+			{
+				auto Width = wcstol(argv[++i], nullptr, 10);
+				InRaySample->SetWidth(Width);
+			}
+			if (wcscmp(argv[i], L"-h") == 0 || wcscmp(argv[i], L"--height") == 0)
+			{
+				auto Height = wcstol(argv[++i], nullptr, 10);
+				InRaySample->SetHeight(Height);
+			}
+			if (wcscmp(argv[i], L"-warp") == 0 || wcscmp(argv[i], L"--warp") == 0)
+			{
+				InRaySample->SetUseWarp(true);
+			}
+		}
+
+		// Free memory allocated by CommandLineToArgvW
+		LocalFree(argv);
+	}
+}
 
 
 static HWND CreateRenderWindow( const wchar_t* InWindowClassName
@@ -165,6 +170,9 @@ i32 Ray_Win32Application::Run(Ray_Sample* pSample, HINSTANCE hInstance, int nCmd
 		// to achieve 100% scaling while still allowing non-client window content to 
 		// be rendered in a DPI sensitive fashion.
 		SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+		//Parse command line arguments. Atm the only options we are getting from command line are width/height and wether we want to create a warp device or not
+		ParseCommandLineArguments(pSample);
 
 		//NOTE: we need to remove the cached pointer from Win32Application class. A solution based on delegates might solve better the problem of calling/sending messages between the sample/game class and the win32 application class
 		mCachedSamplePtr = pSample;

@@ -20,7 +20,7 @@ void Ray_DX12HelloWorldSample::OnInit()
 	if (mHardwareRenderer)
 	{
 
-		mHardwareRenderer->Init(mWidth, mHeight, Ray_Win32Application::GetWindowHandle() );
+		mHardwareRenderer->Init(mWidth, mHeight, Ray_Win32Application::GetWindowHandle() , mUseWarp);
 
 	}
 }

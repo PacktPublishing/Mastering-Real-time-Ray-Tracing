@@ -24,9 +24,16 @@ public:
 
 	virtual void OnDestroy() = 0;
 
+	void SetWidth(u32 InWidth) { mWidth = InWidth; }
+
+	void SetHeight(u32 InHeight) { mHeight = InHeight; }
+
 	u32 GetWidth() const { return mWidth; }
  
 	u32 GetHeight() const { return mHeight;  }
+
+	/** Is the hardware interface using a warp device ? */
+	void SetUseWarp(bool InUseWarp) { mUseWarp = InUseWarp; }
 
 	const wchar_t* GetSampleName() const { return mSampleName.c_str(); }
 
@@ -43,6 +50,8 @@ protected:
 
 	float mAspectRatio = 0.0f;
 
+	bool mUseWarp = false;
+
 	/** A pointer to the hardware renderer. It virtualizes the underlying graphics API */	
 	std::unique_ptr<Ray_IHardwareRenderer> mHardwareRenderer;	
 
@@ -51,4 +60,5 @@ private:
 
 	/** The name of the sample that is shown on the window title */
 	std::wstring mSampleName;
+
 };
