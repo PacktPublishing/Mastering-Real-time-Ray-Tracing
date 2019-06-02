@@ -6,6 +6,7 @@
 
 HWND Ray_Win32Application::mWindowHandle = nullptr;
 
+//TODO: remove sample cached pointer. Favour a delegate implementation instead
 Ray_Sample* Ray_Win32Application::mCachedSamplePtr = nullptr;
 
 bool Ray_Win32Application::mAppIsRunning = false;
