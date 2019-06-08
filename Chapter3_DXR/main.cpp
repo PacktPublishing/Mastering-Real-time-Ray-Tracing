@@ -1,4 +1,5 @@
-//Ray Sample Framework Hello World test 
+
+//Ray Sample Framework Hello World test project
 #include "../RaySampleFramework/RayPCH.h"
 #include "../RaySampleFramework/RayDX12HelloWorldSample.h"
 
