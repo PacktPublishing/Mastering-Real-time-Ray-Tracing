@@ -50,6 +50,8 @@ void Ray_DX12HelloWorldSample::OnRender()
 		
 
 
+		
+
 
 
 		// Present

@@ -216,16 +216,40 @@ ComPtr<IDXGIAdapter4> Ray_DX12HardwareRenderer::GetAdapter(bool InUseWarp)
 }
 
 
-ComPtr<ID3D12Device2> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter4> InAdapter)
+//ComPtr<ID3D12Device2> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter4> InAdapter)
+ComPtr<ID3D12Device5> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter4> InAdapter)
 {
-	ComPtr<ID3D12Device2> d3d12Device2;
+	//ID3D12Device2 is not for ray tracing with DXR
+	//ComPtr<ID3D12Device2> d3d12Device2;
 
-	ThrowIfFailed(D3D12CreateDevice(InAdapter.Get(),D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d3d12Device2)));
+	//ThrowIfFailed(D3D12CreateDevice(InAdapter.Get(),D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d3d12Device2)));
+
+	//Ray tracing capable device creation
+	ComPtr<ID3D12Device5> d3d12Device5;
+
+	ThrowIfFailed(D3D12CreateDevice(InAdapter.Get(), D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&d3d12Device5)));
+
+	//Here we check if ray tracing is supported by the device
+	D3D12_FEATURE_DATA_D3D12_OPTIONS5 d3d12Caps = { };
+
+	//Query the device for the supported set of feature that includes OPTIONS5 and check HRESULT
+	ThrowIfFailed(d3d12Device5->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5,&d3d12Caps,sizeof(d3d12Caps)));
+
+	//Check if we support ray tracing
+	if (d3d12Caps.RaytracingTier < D3D12_RAYTRACING_TIER_1_0)
+	{
+		//Add proper log system here
+		//NOTE: this will eventually be replaced by our logging system
+		OutputDebugString("Driver does not support ray tracing!");		
+		throw std::exception();
+	}
+
 
 	// Enable debug messages in debug mode.
 #if defined(_DEBUG)
 	ComPtr<ID3D12InfoQueue> pInfoQueue;
-	if (SUCCEEDED(d3d12Device2.As(&pInfoQueue)))
+	//if (SUCCEEDED(d3d12Device2.As(&pInfoQueue)))
+	if (SUCCEEDED(d3d12Device5.As(&pInfoQueue)))
 	{
 		pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
 		pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
@@ -259,7 +283,8 @@ ComPtr<ID3D12Device2> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter
 	}
 #endif
 
-	return d3d12Device2;
+	//return d3d12Device2;
+	return d3d12Device5;
 }
 
 
@@ -406,12 +431,18 @@ ComPtr<ID3D12CommandAllocator> Ray_DX12HardwareRenderer::CreateCommandAllocator(
 
 
 
-ComPtr<ID3D12GraphicsCommandList> Ray_DX12HardwareRenderer::CreateCommandList(ComPtr<ID3D12Device2> InDevice
-	, ComPtr<ID3D12CommandAllocator> InCommandAllocator
-	, D3D12_COMMAND_LIST_TYPE InType)
-{
-	ComPtr<ID3D12GraphicsCommandList> CommandList;
+//ComPtr<ID3D12GraphicsCommandList> Ray_DX12HardwareRenderer::CreateCommandList(ComPtr<ID3D12Device2> InDevice
+//	, ComPtr<ID3D12CommandAllocator> InCommandAllocator
+//	, D3D12_COMMAND_LIST_TYPE InType)
 
+ComPtr<ID3D12GraphicsCommandList4> Ray_DX12HardwareRenderer::CreateCommandList(ComPtr<ID3D12Device2> InDevice
+		, ComPtr<ID3D12CommandAllocator> InCommandAllocator
+		, D3D12_COMMAND_LIST_TYPE InType)
+{
+	//ComPtr<ID3D12GraphicsCommandList> CommandList;
+	ComPtr<ID3D12GraphicsCommandList4> CommandList;
+
+	//Create a command list that supports ray tracing
 	ThrowIfFailed(InDevice->CreateCommandList(0, InType, InCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&CommandList)));
 
 	//Before to reset a command list, we must close it.

@@ -46,7 +46,8 @@ public:
 	virtual void EndFrame() override;
 
 	/** Get the D3D command list */
-	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> GetCommandList() const { return mD3DCommandList; }
+	//Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> GetCommandList() const { return mD3DCommandList; }
+	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> GetCommandList() const { return mD3DCommandList; }
 
 private:
 
@@ -63,7 +64,8 @@ private:
 	ComPtr<IDXGIAdapter4> GetAdapter(bool InUseWarp = false);
 
 
-	ComPtr<ID3D12Device2> CreateDevice(ComPtr<IDXGIAdapter4> InAdapter);
+	//ComPtr<ID3D12Device2> CreateDevice(ComPtr<IDXGIAdapter4> InAdapter);
+	ComPtr<ID3D12Device5> CreateDevice(ComPtr<IDXGIAdapter4> InAdapter);
 
 	
 	ComPtr<ID3D12CommandQueue> CreateCommandQueue(ComPtr<ID3D12Device2> InDevice, D3D12_COMMAND_LIST_TYPE InType);
@@ -91,9 +93,12 @@ private:
 
 
 
-	ComPtr<ID3D12GraphicsCommandList> CreateCommandList(  ComPtr<ID3D12Device2> InDevice
-														, ComPtr<ID3D12CommandAllocator> InCommandAllocator
-														, D3D12_COMMAND_LIST_TYPE InType);
+	//ComPtr<ID3D12GraphicsCommandList> CreateCommandList(  ComPtr<ID3D12Device2> InDevice
+	//													, ComPtr<ID3D12CommandAllocator> InCommandAllocator
+	//													, D3D12_COMMAND_LIST_TYPE InType);
+	ComPtr<ID3D12GraphicsCommandList4> CreateCommandList(ComPtr<ID3D12Device2> InDevice
+												      , ComPtr<ID3D12CommandAllocator> InCommandAllocator
+		                                              , D3D12_COMMAND_LIST_TYPE InType);
 
 
 	/** GPU synchronization relevant functions */
@@ -123,13 +128,15 @@ private:
 
 
 	/** D3D12 Device */
-	ComPtr<ID3D12Device2> mD3DDevice;
+	//ComPtr<ID3D12Device2> mD3DDevice;
+	ComPtr<ID3D12Device5> mD3DDevice;   //device for ray tracing
 
 	/** D3D12 command queue */
 	ComPtr<ID3D12CommandQueue> mD3DCommandQueue;
 
 	/** D3D12 command list */
-	ComPtr<ID3D12GraphicsCommandList> mD3DCommandList;
+	//ComPtr<ID3D12GraphicsCommandList> mD3DCommandList;
+	ComPtr<ID3D12GraphicsCommandList4> mD3DCommandList;    //cmd list for ray tracing
 
 	/** D3D12 Command allocator */
 	ComPtr<ID3D12CommandAllocator> mD3DCommandAllocator[kMAX_BACK_BUFFER_COUNT];
