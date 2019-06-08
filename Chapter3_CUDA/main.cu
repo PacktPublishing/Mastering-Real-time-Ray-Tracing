@@ -202,8 +202,11 @@ __global__ void RenderScene(const int N, float* ColorBuffer)
 	Camera camera(Vector3(0.0f,0.0f,-10.0f));
 
 	//Cast a ray in world space from the camera
+
+	//Compute the world space ray direction
 	auto WSDir = camera.GetWorldSpaceRayDir(x,y,N,N);
 
+	//Construct a ray in world space that originates from the camera
 	Ray WSRay(camera.GetCameraEye(), WSDir);
 
 	//Compute intersection and set a color
