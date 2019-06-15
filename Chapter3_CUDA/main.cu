@@ -8,6 +8,12 @@
 #include <stdio.h>
 #include <iostream>
 
+//__constant__ static const float kPI = 3.1415927f;
+
+//__device__ inline float DegToRad(float Deg)
+//{
+//	return (Deg * kPI / 180.0f);
+//}
 
 
 //Ray tracing data structures
@@ -37,7 +43,7 @@ public:
 		mU = InUp.cross(mW);
 		mV = mW.cross(mU);
 
-		mScaleY = tanf(InFov*0.5f);
+		mScaleY = tanf(DegToRad(InFov)*0.5f);
 		mScaleX = mScaleY * InAspectRatio;
 	}
 
@@ -192,14 +198,14 @@ __global__ void RenderScene(const int N, float* ColorBuffer)
 	}
 
 	//Create a simple sphere 10 units away from the world origin
-	Sphere sphere(Vector3(0.0f,0.0f,3.0f),2.5f);
+	Sphere sphere(Vector3(0.0f,0.0f,1.0f),1.f);
 
 	//Prepare two color
 	Vector3 Black(0.0f, 0.0f, 0.0f);   //Black background if we miss a primitive
 	Vector3 Green(0.0f, 1.0f, 0.0f);  //Red color if we hit a primitive (in our case a sphere, but can be any type of primitive)
 
 	//Create a camera
-	Camera camera(Vector3(0.0f,0.0f,-10.0f));
+	Camera camera(Vector3(0.0f,0.0f,-300.0f));
 
 	//Cast a ray in world space from the camera
 
@@ -211,7 +217,7 @@ __global__ void RenderScene(const int N, float* ColorBuffer)
 
 	//Compute intersection and set a color
 	HitData OutHitData;
-	Vector3 ColorResult = sphere.Intersect(WSRay,0.0f,FLT_MAX,OutHitData) ? Green : Black;
+	Vector3 ColorResult = sphere.Intersect(WSRay,0.001f,FLT_MAX,OutHitData) ? Green : Black;
 
 
 	//We access the linear ColorBuffer storing each color component separately (we could have a float3    color buffer for a more compact/cleaner solution)

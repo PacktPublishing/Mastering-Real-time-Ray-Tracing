@@ -9,6 +9,7 @@
     <ClInclude Include="RayIHardwareRenderer.h" />
     <ClInclude Include="RayDX12HardwareRenderer.h" />
     <ClInclude Include="FrameManager.h" />
+    <ClInclude Include="..\Utils\fbxmodelloader.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="RayPCH.cpp" />
@@ -16,5 +17,8 @@
     <ClCompile Include="RaySample.cpp" />
     <ClCompile Include="RayDX12HelloWorldSample.cpp" />
     <ClCompile Include="RayDX12HardwareRenderer.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="RaytracingShaders.hlsl" />
   </ItemGroup>
 </Project>

@@ -31,6 +31,8 @@ public:
 	/** Call this method before to begin a frame     */
 	virtual void BeginFrame(float* InClearColor = nullptr) = 0;
 
+	/** Wait for GPU to finish any pending work before to proceed*/
+	virtual void WaitForGpuToFinish() = 0;
 
 	/** Call this method at the end of a given frame perform the present*/
 	virtual void EndFrame() = 0;
@@ -41,5 +43,11 @@ public:
 protected:
 
 	bool mVSync = false;
+
+
+	/** Viewport relevant data members */
+	u32 mWidth;
+
+	u32 mHeight;
 
 };

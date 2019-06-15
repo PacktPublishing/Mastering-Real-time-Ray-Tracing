@@ -5,6 +5,46 @@
 
 #include <chrono>
 
+//TODO: refactor this. Maybe move it to another header file
+struct Viewport
+{
+	float mLeft;
+	float mTop;
+	float mRight;
+	float mBottom;
+};
+
+//TODO: refactor this. Maybe move it to another header file
+struct RayGenCB
+{
+	Viewport mViewport;
+	Viewport mStencil;
+};
+
+//TODO: Refactor this
+namespace GlobalRootSignatureParams 
+{
+	enum Value 
+	{
+		OutputViewSlot = 0,           //UAV slot
+		AccelerationStructureSlot,    //Acceleration structure slot
+		Count                         //Total number of global signature in use 
+	};
+}
+
+
+//TODO: Refactor this 
+namespace LocalRootSignatureParams 
+{
+	enum Value 
+	{
+		ViewportConstantSlot = 0,    //CB slot (we pass viewport)
+		Count
+	};
+}
+
+
+
 class Ray_DX12HardwareRenderer : public Ray_IHardwareRenderer
 {
 public:
@@ -45,6 +85,30 @@ public:
 	/** Call this method at the end of a given frame perform the present*/
 	virtual void EndFrame() override;
 
+
+	/** Wait for GPU to finish any pending work before to proceed*/
+	virtual void WaitForGpuToFinish() override
+	{
+		if (mD3DCommandQueue && mFence && mFenceEvent != nullptr)
+		{
+			// Schedule a Signal command in the GPU queue.
+			u64 fenceValue = mFrameFenceValues[mBackBufferIndex];
+			if (SUCCEEDED(mD3DCommandQueue->Signal(mFence.Get(), fenceValue)))
+			{
+				// Wait until the Signal has been processed.
+				if ( SUCCEEDED( mFence->SetEventOnCompletion(fenceValue, mFenceEvent) ) )
+				{
+					WaitForSingleObjectEx(mFenceEvent, INFINITE, FALSE);
+
+					// Increment the fence value for the current frame.
+					mFrameFenceValues[mBackBufferIndex]++;
+				}
+			}
+		}
+	}
+
+
+	// D3D12 specific methods
 	/** Get the D3D command list */
 	//Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> GetCommandList() const { return mD3DCommandList; }
 	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> GetCommandList() const { return mD3DCommandList; }
@@ -107,6 +171,44 @@ private:
 
 
 	HANDLE CreateEventHandle();
+
+
+	// Ray tracing specific methods ///////////////////////////////////////////////
+
+	// TODO: Refactor thse methods. Some of them might be managed differently. Like heap descriptors might be created on demand and so on.
+	// We want a system that can load ray tracing shaders and run on some kind of geometry 
+
+	// Root signatures represent parameters passed to shaders 
+	void CreateRootSignatures();
+
+	// Ray tracing PSO creation (we eventually manage PSO with some kind of factory)
+	void CreateRaytracingPipelineStateObject();
+
+	// Create a heap for descriptors for ray tracing resource 
+	void CreateDescriptorHeap();
+
+	// Build geometry 
+	void BuildGeometry();
+
+	// Build acceleration structures 
+	void BuildAccelerationStructures();
+
+	// Build shader tables, which define shaders and their local root arguments.
+	void BuildShaderTables();
+
+
+	// Create an output 2D texture to store the raytracing result to.
+	void CreateRaytracingOutputResource();
+
+
+
+
+	void SerializeAndCreateRaytracingRootSignature(D3D12_ROOT_SIGNATURE_DESC& Desc, ComPtr<ID3D12RootSignature>* RootSig);
+	void CreateLocalRootSignatureSubobjects(CD3D12_STATE_OBJECT_DESC* RaytracingPipeline);
+
+	u32 AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE* CPUDescriptor, u32 DescriptorIndexToUse);
+
+	///////////////////////////////////////////////////////////////////////////////
 	
 
 	//DX12 specific interfaces/////////////////////////////////
@@ -137,6 +239,9 @@ private:
 	/** D3D12 command list */
 	//ComPtr<ID3D12GraphicsCommandList> mD3DCommandList;
 	ComPtr<ID3D12GraphicsCommandList4> mD3DCommandList;    //cmd list for ray tracing
+
+	/** DirectX Ray tracing state object */
+	ComPtr<ID3D12StateObjectPrototype> mDXRStateObject;
 
 	/** D3D12 Command allocator */
 	ComPtr<ID3D12CommandAllocator> mD3DCommandAllocator[kMAX_BACK_BUFFER_COUNT];
@@ -199,6 +304,49 @@ private:
 	/** The minimum D3D feature level we must support  */
 	D3D_FEATURE_LEVEL mD3DMinFeatureLevel;
 
-	///////////////////////////////////////////////////////////
+	// Ray tracing specific structures and resources //////////////////////////////
+
+	/** Used for TLAS, BLAS and Ray tracing output buffer*/
+	ComPtr<ID3D12DescriptorHeap> mDescriptorHeap;
+	u32 mDescriptorsNum;
+	u32 mDescriptorSize;
+
+
+	// Root signatures. Used to pass parameters to the shaders
+	ComPtr<ID3D12RootSignature> mRaytracingGlobalRootSignature;
+	ComPtr<ID3D12RootSignature> mRaytracingLocalRootSignature;
+
+	// geometry data (vertex and index buffer)
+	ComPtr<ID3D12Resource> mVB;
+	ComPtr<ID3D12Resource> mIB;
+
+	// Acceleration structure
+
+	/** Bottom level acceleration structure */
+	ComPtr<ID3D12Resource> mBLAS;
+
+	/** Top level acceleration structure */
+	ComPtr<ID3D12Resource> mTLAS;
+
+	/** Resource used to store ray tracing output */
+	ComPtr<ID3D12Resource> mRayTracingOutputBuffer;
+	D3D12_GPU_DESCRIPTOR_HANDLE mRaytracingOutputResourceUAVGpuDescriptor;
+	UINT mRaytracingOutputResourceUAVDescriptorHeapIndex;
+
+	 
+	/** Keeps track of the allocated descriptors */
+	u32 mAllocatedDescriptorsIndex = 0;
+
+
+	/** This is the constand buffer we pass to the ray generation shader */
+	RayGenCB mRayGenCB;
+
+	// Shader tables
+	ComPtr<ID3D12Resource> mMissShaderTable;
+	ComPtr<ID3D12Resource> mHitGroupShaderTable;
+	ComPtr<ID3D12Resource> mRayGenShaderTable;
+
+
+	//////////////////////////////////////////////////////////////////////////////
 
 };

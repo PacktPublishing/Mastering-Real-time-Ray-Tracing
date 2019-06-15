@@ -23,7 +23,7 @@
 #include <assert.h>
 
 #include <dxgi1_6.h>
-//#include "d3d12_1.h"
+#include "d3d12_1.h"
 #include <atlbase.h>
 //#include "d3dx12.h"
 // DirectX 12 specific headers.
@@ -31,6 +31,8 @@
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
+
+#include "D3D12RaytracingHelpers.hpp"
 
 // D3D12 extension library.
 #include "d3dx12.h"
