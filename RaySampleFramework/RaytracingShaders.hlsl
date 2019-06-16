@@ -92,7 +92,7 @@ void RayCastingShader()
 
 	// Remember tmin and tmax? We set them here as well to account for certain precision issues
 	ray.TMin = 0.001;
-	ray.TMax = 100000.0;
+	ray.TMax = 10000.0;
 
 	// RayPayload is user defined struct in which we can return the return result of the TraceRay call
 	RayPayload payload = { float4(0, 0, 0, 0) };

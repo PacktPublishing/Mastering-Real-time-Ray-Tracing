@@ -35,13 +35,13 @@ class Camera
 {
 public:
 
-	__device__ Camera(const Vector3& InEye = Vector3(0.f, 0.f, 0.f), const Vector3& InLookAt = Vector3(0.f, 0.f, 50.f), const Vector3& InUp = Vector3(0.f, 1.f, 0.f), float InFov = 60.f, float InAspectRatio = 1.f)
+	__device__ Camera(const Vector3& InEye = Vector3(0.f, 0.f, 0.f), const Vector3& InLookAt = Vector3(0.f, 0.f, 50.f), const Vector3& InUp = Vector3(0.f, 1.f, 0.f), float InFov = 60.f, float InAspectRatio = 1.f) : mEye(InEye), mLookAt(InLookAt)
 	{
 
 		const Vector3& Fwd = InLookAt - InEye;
 		mW = Fwd.norm();
-		mU = InUp.cross(mW);
-		mV = mW.cross(mU);
+		mU = mW.cross(InUp);
+		mV = mU.cross(mW);
 
 		mScaleY = tanf(DegToRad(InFov)*0.5f);
 		mScaleX = mScaleY * InAspectRatio;
@@ -198,14 +198,14 @@ __global__ void RenderScene(const int N, float* ColorBuffer)
 	}
 
 	//Create a simple sphere 10 units away from the world origin
-	Sphere sphere(Vector3(0.0f,0.0f,1.0f),1.f);
+	Sphere sphere(Vector3(0.0f,0.0f,1.0f),1.0f);
 
 	//Prepare two color
 	Vector3 Black(0.0f, 0.0f, 0.0f);   //Black background if we miss a primitive
 	Vector3 Green(0.0f, 1.0f, 0.0f);  //Red color if we hit a primitive (in our case a sphere, but can be any type of primitive)
 
 	//Create a camera
-	Camera camera(Vector3(0.0f,0.0f,-300.0f));
+	Camera camera(Vector3(0.0f,0.0f,-5.0f));
 
 	//Cast a ray in world space from the camera
 

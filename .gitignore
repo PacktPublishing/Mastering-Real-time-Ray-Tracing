@@ -22,3 +22,4 @@
 *.db-wal
 *.enc
 *.pch
+*.hlsl.h
