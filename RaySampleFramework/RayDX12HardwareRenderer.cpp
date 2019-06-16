@@ -453,6 +453,10 @@ void Ray_DX12HardwareRenderer::BuildGeometry()
 	// Ideally we would like to load a model from disk rather than a simple geometry
 
 
+	std::vector<MyVertex> VBuffer;
+	std::vector<u16> IBuffer;
+	FBXModelLoader::Get().Load("../Assets/boat.fbx", VBuffer,IBuffer);
+
 
 	//auto device = m_deviceResources->GetD3DDevice();
 	//Index indices[] =
@@ -733,6 +737,17 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 	
 	//Create the CPU event that we'll use to stall the CPU on the fence value (the fence value will get signaled from the GPU as soon as the GPU will reach the fence)	
 	mFenceEvent = CreateEventHandle();
+
+
+	// Ray Tracing objects init
+
+	BuildGeometry();
+
+
+
+
+
+
 
 
 }

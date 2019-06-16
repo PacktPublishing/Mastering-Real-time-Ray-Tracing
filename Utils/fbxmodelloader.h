@@ -31,7 +31,7 @@ public:
 		return Instance;
 	}
 
-	bool Load(const char* PathToFile,std::vector<MyVertex>* pOutVertexVector)
+	bool Load(const char* PathToFile,std::vector<MyVertex>& OutVertexVector,std::vector<u16>& OutIndices)
 	{
 		if (mFbxSdkManager == nullptr)
 		{
@@ -42,62 +42,89 @@ public:
 		}
 
 		FbxImporter* pImporter = FbxImporter::Create(mFbxSdkManager, "");
-		FbxScene* pFbxScene = FbxScene::Create(mFbxSdkManager, "");
-
-		//bool bSuccess = pImporter->Initialize("C:\\MyPath\\MyModel.fbx", -1, mFbxSdkManager->GetIOSettings());
+		FbxScene* pFbxScene = FbxScene::Create(mFbxSdkManager, "");	
 
 		bool bSuccess = pImporter->Initialize(PathToFile, -1, mFbxSdkManager->GetIOSettings());
-		if (!bSuccess) return false;
+		if (!bSuccess)
+		{
+			return false;
+		}
 
 		bSuccess = pImporter->Import(pFbxScene);
-		if (!bSuccess) return false;
+		if (!bSuccess) 
+		{
+			return false;
+		}
 
 		pImporter->Destroy();
 
-		FbxNode* pFbxRootNode = pFbxScene->GetRootNode();
 
-		if (pFbxRootNode)
-		{
-			for (int i = 0; i < pFbxRootNode->GetChildCount(); i++)
-			{
-				FbxNode* pFbxChildNode = pFbxRootNode->GetChild(i);
+		FbxNode* FbxRootNode = pFbxScene->GetRootNode();
 
-				if (pFbxChildNode->GetNodeAttribute() == NULL)
-					continue;
-
-				FbxNodeAttribute::EType AttributeType = pFbxChildNode->GetNodeAttribute()->GetAttributeType();
-
-				if (AttributeType != FbxNodeAttribute::eMesh)
-					continue;
-
-				FbxMesh* pMesh = (FbxMesh*)pFbxChildNode->GetNodeAttribute();
-
-				FbxVector4* pVertices = pMesh->GetControlPoints();
-				
-
-				for (int j = 0; j < pMesh->GetPolygonCount(); j++)
-				{
-					int iNumVertices = pMesh->GetPolygonSize(j);
-					assert(iNumVertices == 3);
-
-					for (int k = 0; k < iNumVertices; k++) {
-						int iControlPointIndex = pMesh->GetPolygonVertex(j, k);
-
-						MyVertex vertex;
-						vertex.pos[0] = (float)pVertices[iControlPointIndex].mData[0];
-						vertex.pos[1] = (float)pVertices[iControlPointIndex].mData[1];
-						vertex.pos[2] = (float)pVertices[iControlPointIndex].mData[2];
-						pOutVertexVector->push_back(vertex);
-					}
-				}
-
-			}
-
-		}
+		// Let's traverse the scene and load our model
+		TraverseScene(FbxRootNode,OutVertexVector,OutIndices,ExtractMeshData);
+	
+	
 		return true;
 	}
 
 private:
+
+	// We extract just vertices 
+	static void ExtractMeshData(FbxMesh* Mesh, std::vector<MyVertex>& OutVertexVector, std::vector<u16>& OutIndices)
+	{
+		i32 NumVertices = Mesh->GetControlPointsCount();
+		OutVertexVector.reserve(NumVertices);
+
+		// Read Vertices
+		for (i32 j = 0; j < NumVertices; j++)
+		{
+
+			FbxVector4 Coord = Mesh->GetControlPointAt(j);
+
+			MyVertex vertex;
+			vertex.pos[0] = (float)Coord.mData[0];
+			vertex.pos[1] = (float)Coord.mData[1];
+			vertex.pos[2] = (float)Coord.mData[2];
+			OutVertexVector.push_back(vertex);
+		}
+
+
+		//Read Indices
+		i32 TriangleCount = Mesh->GetPolygonCount();
+		u32 IndexCount    = TriangleCount*3;
+		OutIndices.reserve(IndexCount);
+		for (i32 i = 0; i < TriangleCount; ++i)
+		{
+			for (u32 j = 0; j < 3; ++j)
+			{
+				i32 ctrlPointIndex = Mesh->GetPolygonVertex(i, j);
+				OutIndices.push_back(ctrlPointIndex);
+			}
+		}
+
+	}
+
+	void TraverseScene(FbxNode* Node,std::vector<MyVertex>& OutVertexVector,std::vector<u16>& OutIndices,void (*ExtractMeshDataCallback)(FbxMesh*,std::vector<MyVertex>&,std::vector<u16>&))
+	{
+
+		if (Node == nullptr)
+		{
+			return;
+		}
+
+		FbxMesh* Mesh = Node->GetMesh();
+		if (Mesh != nullptr)
+		{
+			ExtractMeshDataCallback(Mesh,OutVertexVector, OutIndices);
+		}
+
+		for (i32 i = 0; i < Node->GetChildCount(); i++)
+		{
+			TraverseScene(Node->GetChild(i),OutVertexVector,OutIndices,ExtractMeshDataCallback);
+		}
+
+	}
 
 	FbxManager* mFbxSdkManager = nullptr;
 
