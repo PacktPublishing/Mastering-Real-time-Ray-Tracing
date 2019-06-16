@@ -49,9 +49,9 @@ void Ray_DX12HelloWorldSample::OnRender()
 		auto CmdList = DX12HRenderer->GetCommandList();
 		
 
-
+		//Render the actual frame 
+		mHardwareRenderer->Render();
 		
-
 
 
 		// Present

@@ -62,5 +62,8 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 
 
-//Useful macro for unused parameters
+// Useful macro for unused parameters
 #define UNUSED_PARAMETER(x) ((void)(x))
+
+// This is the base asset root dir
+const std::string gAssetRootDir = "../Assets/";

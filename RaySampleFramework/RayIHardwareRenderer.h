@@ -31,6 +31,9 @@ public:
 	/** Call this method before to begin a frame     */
 	virtual void BeginFrame(float* InClearColor = nullptr) = 0;
 
+	/** Call this method to render the actual frame */
+	virtual void Render() = 0;
+
 	/** Wait for GPU to finish any pending work before to proceed*/
 	virtual void WaitForGpuToFinish() = 0;
 

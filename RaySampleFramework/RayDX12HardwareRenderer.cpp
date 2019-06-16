@@ -445,40 +445,22 @@ void Ray_DX12HardwareRenderer::CreateDescriptorHeap()
 
 }
 
+// TODO: we build geometry in the hardware renderer for now, but we might move this elsewhere due to a refactor
 // Build geometry 
 void Ray_DX12HardwareRenderer::BuildGeometry()
 {
+	// Get the currnt d3d device
+	auto Device = mD3DDevice.Get();
 
-
-	// Ideally we would like to load a model from disk rather than a simple geometry
-
-
+	// Loads vertices and indices from FBX file
 	std::vector<MyVertex> VBuffer;
 	std::vector<u16> IBuffer;
-	FBXModelLoader::Get().Load("../Assets/boat.fbx", VBuffer,IBuffer);
+	FBXModelLoader::Get().Load((gAssetRootDir + "boat.fbx").c_str(), VBuffer, IBuffer);
 
+	// This helper functions creates a buffer resource of type committed and upload vertex and index data in each one of them
+	AllocateUploadBuffer(Device, &VBuffer[0], sizeof(MyVertex)*VBuffer.size(), &mVB);
 
-	//auto device = m_deviceResources->GetD3DDevice();
-	//Index indices[] =
-	//{
-	//	0, 1, 2
-	//};
-
-	//float depthValue = 1.0;
-	//float offset = 0.7f;
-	//Vertex vertices[] =
-	//{
-	//	// The sample raytraces in screen space coordinates.
-	//	// Since DirectX screen space coordinates are right handed (i.e. Y axis points down).
-	//	// Define the vertices in counter clockwise order ~ clockwise in left handed.
-	//	{ 0, -offset, depthValue },
-	//	{ -offset, offset, depthValue },
-	//	{ offset, offset, depthValue }
-	//};
-
-	//AllocateUploadBuffer(device, vertices, sizeof(vertices), &m_vertexBuffer);
-	//AllocateUploadBuffer(device, indices, sizeof(indices), &m_indexBuffer);
-
+	AllocateUploadBuffer(Device, &IBuffer[0], IBuffer.size()*sizeof(u16), &mIB);
 }
 
 // Build acceleration structures 
@@ -738,18 +720,32 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 	//Create the CPU event that we'll use to stall the CPU on the fence value (the fence value will get signaled from the GPU as soon as the GPU will reach the fence)	
 	mFenceEvent = CreateEventHandle();
 
+	
+	// TODO: A heavy refactoring is needed for the ray tracing object creation and management part.
+	// In particular we expect to manage heap descriptors, PSO etc. in separated systems/classes. This should promote more modularity and let the code to be more maintainable.
 
 	// Ray Tracing objects init
 
+    // Create root signatures for the shaders.
+	CreateRootSignatures();
+
+	// Create a raytracing pipeline state object which defines the binding of shaders, state and resources to be used during raytracing.
+	CreateRaytracingPipelineStateObject();
+
+	// Create a heap for descriptors.
+	CreateDescriptorHeap();
+
+	// Build geometry to be used in the sample.
 	BuildGeometry();
 
+	// Build raytracing acceleration structures from the generated geometry.
+	BuildAccelerationStructures();
 
+	// Build shader tables, which define shaders and their local root arguments.
+	BuildShaderTables();
 
-
-
-
-
-
+	// Create an output 2D texture to store the raytracing result to.
+	CreateRaytracingOutputResource();
 }
 
 void Ray_DX12HardwareRenderer::Destroy()
@@ -1117,14 +1113,74 @@ void Ray_DX12HardwareRenderer::BeginFrame(float* InClearColor)
 }
 
 
+void Ray_DX12HardwareRenderer::CopyRayTracingOutputToBackBuffer()
+{
+	auto CommandList = mD3DCommandList.Get();
+	auto BackBuffer = mRenderTargets[mBackBufferIndex].Get();
+
+	D3D12_RESOURCE_BARRIER preCopyBarriers[2];
+	preCopyBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
+	preCopyBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(mRayTracingOutputBuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	CommandList->ResourceBarrier(ARRAYSIZE(preCopyBarriers), preCopyBarriers);
+
+	CommandList->CopyResource(BackBuffer, mRayTracingOutputBuffer.Get());
+
+	D3D12_RESOURCE_BARRIER postCopyBarriers[2];
+	postCopyBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+	postCopyBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(mRayTracingOutputBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+	CommandList->ResourceBarrier(ARRAYSIZE(postCopyBarriers), postCopyBarriers);
+}
+
+void Ray_DX12HardwareRenderer::Render()
+{
+	//TODO: We might want to refactor this one as well
+
+	// Get the d3d command list
+	auto CommandList = mD3DCommandList.Get();
+
+	// Here we prepare a lamda function that performs a call to DispatchRays
+	// Which basically will create a Grid in which each element is a ray 
+	auto DispatchRays = [&](auto* commandList, auto* stateObject, auto* dispatchDesc)
+	{
+		// Since each shader table has only one shader record, the stride is same as the size.
+		dispatchDesc->HitGroupTable.StartAddress = mHitGroupShaderTable->GetGPUVirtualAddress();
+		dispatchDesc->HitGroupTable.SizeInBytes = mHitGroupShaderTable->GetDesc().Width;
+		dispatchDesc->HitGroupTable.StrideInBytes = dispatchDesc->HitGroupTable.SizeInBytes;
+		dispatchDesc->MissShaderTable.StartAddress = mMissShaderTable->GetGPUVirtualAddress();
+		dispatchDesc->MissShaderTable.SizeInBytes = mMissShaderTable->GetDesc().Width;
+		dispatchDesc->MissShaderTable.StrideInBytes = dispatchDesc->MissShaderTable.SizeInBytes;
+		dispatchDesc->RayGenerationShaderRecord.StartAddress = mRayGenShaderTable->GetGPUVirtualAddress();
+		dispatchDesc->RayGenerationShaderRecord.SizeInBytes = mRayGenShaderTable->GetDesc().Width;
+		dispatchDesc->Width = mWidth;
+		dispatchDesc->Height = mHeight;
+		dispatchDesc->Depth = 1;
+		commandList->SetPipelineState1(stateObject);
+		commandList->DispatchRays(dispatchDesc);
+	};
+
+
+	CommandList->SetComputeRootSignature(mRaytracingGlobalRootSignature.Get());
+
+	D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
+	CommandList->SetDescriptorHeaps(1, mDescriptorHeap.GetAddressOf());
+	CommandList->SetComputeRootDescriptorTable(GlobalRootSignatureParams::OutputViewSlot, mRaytracingOutputResourceUAVGpuDescriptor);
+	CommandList->SetComputeRootShaderResourceView(GlobalRootSignatureParams::AccelerationStructureSlot, mTLAS->GetGPUVirtualAddress());
+	DispatchRays(CommandList, mDXRStateObject.Get(), &dispatchDesc);
+
+
+	// Done! Copy the result on backbuffer ready to be displayed
+	CopyRayTracingOutputToBackBuffer();
+}
+
 
 void Ray_DX12HardwareRenderer::EndFrame()
 {
 	auto BackBuffer = mRenderTargets[mBackBufferIndex];
 
-	CD3DX12_RESOURCE_BARRIER Barrier = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+//	CD3DX12_RESOURCE_BARRIER Barrier = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 
-	mD3DCommandList->ResourceBarrier(1, &Barrier);
+//	mD3DCommandList->ResourceBarrier(1, &Barrier);
 
 	//After transitioning to the correct state, the command list that contains the resource transition barrier must be executed on the command queue.
 	ThrowIfFailed(mD3DCommandList->Close());

@@ -82,6 +82,10 @@ public:
 	virtual void BeginFrame(float* InClearColor = nullptr) override;
 
 
+	/** Call this method to render the actual frame */
+	virtual void Render() override;
+
+
 	/** Call this method at the end of a given frame perform the present*/
 	virtual void EndFrame() override;
 
@@ -200,7 +204,8 @@ private:
 	// Create an output 2D texture to store the raytracing result to.
 	void CreateRaytracingOutputResource();
 
-
+	// Used to copy the ray traced results to backbuffer in order to display them
+	void CopyRayTracingOutputToBackBuffer();
 
 
 	void SerializeAndCreateRaytracingRootSignature(D3D12_ROOT_SIGNATURE_DESC& Desc, ComPtr<ID3D12RootSignature>* RootSig);
