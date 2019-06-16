@@ -455,7 +455,7 @@ void Ray_DX12HardwareRenderer::BuildGeometry()
 	// Loads vertices and indices from FBX file
 	std::vector<MyVertex> VBuffer;
 	std::vector<u16> IBuffer;
-	FBXModelLoader::Get().Load((gAssetRootDir + "boat.fbx").c_str(), VBuffer, IBuffer);
+	FBXModelLoader::Get().Load((gAssetRootDir + "Sphere.fbx").c_str(), VBuffer, IBuffer);
 
 	// This helper functions creates a buffer resource of type committed and upload vertex and index data in each one of them
 	AllocateUploadBuffer(Device, &VBuffer[0], sizeof(MyVertex)*VBuffer.size(), &mVB);
@@ -482,7 +482,7 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 	geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
 	geometryDesc.Triangles.VertexCount = static_cast<UINT>(mVB->GetDesc().Width) / (sizeof(float)*3);
 	geometryDesc.Triangles.VertexBuffer.StartAddress = mVB->GetGPUVirtualAddress();
-	geometryDesc.Triangles.VertexBuffer.StrideInBytes = (sizeof(float) * 3);
+	geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(MyVertex);
 
 	// Mark the geometry as opaque. 
 	// PERFORMANCE TIP: mark geometry as opaque whenever applicable as it can enable important ray processing optimizations.

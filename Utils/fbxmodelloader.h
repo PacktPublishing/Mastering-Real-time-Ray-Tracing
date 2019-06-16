@@ -83,9 +83,11 @@ private:
 			FbxVector4 Coord = Mesh->GetControlPointAt(j);
 
 			MyVertex vertex;
+
+			//We flip the z-axis with the y because our default up axis is y!
 			vertex.pos[0] = (float)Coord.mData[0];
-			vertex.pos[1] = (float)Coord.mData[1];
-			vertex.pos[2] = (float)Coord.mData[2];
+			vertex.pos[2] = (float)Coord.mData[1];
+			vertex.pos[1] = (float)Coord.mData[2];
 			OutVertexVector.push_back(vertex);
 		}
 
@@ -96,7 +98,7 @@ private:
 		OutIndices.reserve(IndexCount);
 		for (i32 i = 0; i < TriangleCount; ++i)
 		{
-			for (u32 j = 0; j < 3; ++j)
+			for (i32 j = 2; j >= 0; --j)
 			{
 				i32 ctrlPointIndex = Mesh->GetPolygonVertex(i, j);
 				OutIndices.push_back(ctrlPointIndex);

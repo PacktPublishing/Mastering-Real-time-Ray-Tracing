@@ -28,5 +28,6 @@ void Ray_Sample::ResizeWindow(u32 ClientWidth, u32 ClientHeight)
 	{
 		mHardwareRenderer->Resize(mWidth, mHeight);
 	}
+
 }
 
