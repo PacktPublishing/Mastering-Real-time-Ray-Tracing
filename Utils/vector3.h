@@ -22,7 +22,7 @@ private:
 	};
 
 public:
-
+	
 	__host__ __device__ Vector3(float InX = 0.0f, float InY = 0.0f, float InZ = 0.0f) : x(InX), y(InY), z(InZ) { }
 
 	__host__ __device__ Vector3(const Vector3& InVec) : x(InVec.x), y(InVec.y), z(InVec.z) { }
@@ -127,9 +127,12 @@ public:
 		return Vector3(x * Scalar, y * Scalar, z * Scalar);
 	}
 
-	__host__ __device__ Vector3 operator*=(float Scalar) const
+	__host__ __device__ Vector3& operator*=(float Scalar) 
 	{
-		return Vector3(*this * Scalar);
+		x *= Scalar;
+		y *= Scalar;
+		z *= Scalar;
+		return *this;
 	}
 
 	__host__ __device__ Vector3 operator/(float Scalar) const
