@@ -9,7 +9,10 @@
 
 
 // The number of samples/rays we shoot for each pixel for distributed ray tracing
-#define SAMPLES 1024 
+#define SAMPLES 1024
+
+// Do we want to enable Anti Aliasing via jittering?
+#define AA_ENABLED 1
 
 //Useful macro to check cuda error code returned from cuda functions
 #define CHECK_CUDA_ERRORS(val) Check( (val), #val, __FILE__, __LINE__ )
@@ -100,10 +103,11 @@ private:
 	Vector3 mLookAt;
 
 	/**Focal length */
-	float mFocalLength = 1.f;
+	float mFocalLength = 5.25f;
 
 	/**Aperture Size */
-	float mApertureSize = 0.2f;
+	//float mApertureSize = 0.7f;
+	float mApertureSize = 0.0f;
 
 };
 
@@ -238,10 +242,12 @@ __global__ void RenderScene(const u32 ScreenWidth,const u32 ScreenHeight, float*
 	 
 
 	//Create a simple sphere list made by two spheres
-	const u32 kNumSpheres = 3;
+	const u32 kNumSpheres = 5;
 	Sphere SphereList[kNumSpheres] = { { {0.0f,0.0f,1.0f}, {0.0f,1.0f,0.0f},1.0f}
 					               , { {0.75f,0.0f,3.5f},{1.0f,0.0f,0.0f},1.0f} 
-	                               , { {1.5f,0.0f,6.0f},{1.0f,1.0f,0.0f},1.0f} };
+	                               , { {1.5f,0.0f,6.0f},{1.0f,1.0f,0.0f},1.0f} 
+	                               , { {-0.5f,0.0f,0.0f}, {0.0f,0.0f,1.0f},1.0f } 
+	                               , { {-1.0f,0.0f,-1.0f}, {1.0f,0.0f,1.0f},1.0f } };
 
 	//Prepare two color
 	Vector3 Green(0.0f, 1.0f, 0.0f);  //Red color if we hit a primitive (in our case a sphere, but can be any type of primitive)
@@ -274,11 +280,15 @@ __global__ void RenderScene(const u32 ScreenWidth,const u32 ScreenHeight, float*
 	for (u32 i = 0; i < SAMPLES; ++i)
 	{
 		// Pick a random sample in 0-1 range
+#if AA_ENABLED
 		float rx = GetRandom01(&Seed0, &Seed1);
 		float ry = GetRandom01(&Seed0, &Seed1);
 
 		//Compute the world space ray direction for each sample and then average the results
 		auto WSDir = camera.GetWorldSpaceRayDir(((float)x) + rx, ((float)y) + ry , ScreenWidth, ScreenHeight);
+#else
+		auto WSDir = camera.GetWorldSpaceRayDir(((float)x), ((float)y), ScreenWidth, ScreenHeight);
+#endif
 
 		//Construct a ray in world space that originates from the camera
 		Ray WSRay(camera.GetCameraEye(), WSDir);
