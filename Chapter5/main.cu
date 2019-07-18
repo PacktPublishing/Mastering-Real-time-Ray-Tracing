@@ -48,7 +48,13 @@ class Camera
 {
 public:
 
-	__device__ Camera(const Vector3& InEye = Vector3(0.f, 0.f, 0.f), const Vector3& InLookAt = Vector3(0.f, 0.f, 50.f), const Vector3& InUp = Vector3(0.f, 1.f, 0.f), float InFov = 60.f, float InAspectRatio = 1.f) : mEye(InEye), mLookAt(InLookAt)
+	__device__ Camera(const Vector3& InEye = Vector3(0.f, 0.f, 0.f)
+		            , const Vector3& InLookAt = Vector3(0.f, 0.f, 50.f)
+		            , const Vector3& InUp = Vector3(0.f, 1.f, 0.f)
+		            , float InFov = 60.f
+		            , float InAspectRatio = 1.f
+	                , float InTime0 = 0.0f
+	                , float InTime1 = 1.0f) : mEye(InEye), mLookAt(InLookAt),mTime0(InTime0),mTime1(InTime1)
 	{
 
 		const Vector3& Fwd = InLookAt - InEye;
@@ -109,6 +115,14 @@ private:
 	//float mApertureSize = 0.7f;
 	float mApertureSize = 0.0f;
 
+	// Motion blur variables
+
+	// Time at which the shutter was open
+	float mTime0;
+
+	// Time at which the shutter is closed
+	float mTime1;
+
 };
 
 
@@ -118,7 +132,7 @@ class Ray
 public:
 
 	/** Ctor */
-	__device__ Ray(const Vector3& InOrigin = Vector3(0, 0, 0), const Vector3& InDirection = Vector3(0, 0, 1)) : mOrigin(InOrigin), mDirection(InDirection) {}
+	__device__ Ray(const Vector3& InOrigin = Vector3(0, 0, 0), const Vector3& InDirection = Vector3(0, 0, 1),float InTime = 0.0f) : mOrigin(InOrigin), mDirection(InDirection),mTime(InTime) {}
 
 	/** Copy Ctor */
 	__device__ Ray(const Ray& InRay) : mOrigin(InRay.mOrigin), mDirection(InRay.mDirection) { }
@@ -129,13 +143,20 @@ public:
 		return mOrigin + mDirection * t;
 	}
 
+	// This ray origin
 	Vector3 mOrigin;
 
+	// This ray direction
 	Vector3 mDirection;
 
+	// Min t
 	float mTmin;
 
+	// Max t
 	float mTmax;
+
+	// Added for motion blur
+	float mTime = 0.0f;
 
 };
 
@@ -143,31 +164,46 @@ public:
 //Simple sphere class
 struct Sphere
 {
-	/** The center of the sphere */
-	Vector3 mCenter;
+	// We also need for the sphere to move to account for motion blur
+
+	/** The center of the sphere at time 0*/
+	Vector3 mCenter0;
+
+	/** The center of the sphere at time 1*/
+	Vector3 mCenter1;
+
 
     /** Let's give this sphere a color */
 	Vector3 mColor;
 
-
 	/** The radius of the sphere */
 	float mRadius;
 
+	/** Time at which the sphere started moving (coincides with camera shutter open) */
+	float mTime0 = 0.0f;
+
+	/** Time at which the sphere ended up being (coincides with camera shutter closed) */
+	float mTime1 = 1.0f;
+
+	__device__ Vector3 GetCenterAtTime(float Time) const noexcept
+	{
+		return mCenter0 + (mCenter1 - mCenter0)*((Time - mTime0) / (mTime1 - mTime0));
+	}
 	
 	/** Ctor */
-//	__device__ Sphere(const Vector3& InCenter = Vector3(0, 0, 0),const Vector3& InColor = Vector3(1,1,1),float InRadius = 1) : mCenter(InCenter), mColor(InColor) ,mRadius(InRadius) {  }
+	__device__ Sphere(const Vector3& InCenter0 = Vector3(0, 0, 0), const Vector3& InCenter1 = Vector3(0, 0, 0),const Vector3& InColor = Vector3(1,1,1),float InRadius = 1) : mCenter0(InCenter0), mCenter1(InCenter1), mColor(InColor) ,mRadius(InRadius) {  }
 
 	/** Copy Ctor */
-//	__device__ Sphere(const Sphere& InSphere) : mCenter(InSphere.mCenter), mColor(InSphere.mColor),mRadius(InSphere.mRadius) {  }
+	__device__ Sphere(const Sphere& InSphere) : mCenter0(InSphere.mCenter0), mCenter1(InSphere.mCenter1), mColor(InSphere.mColor),mRadius(InSphere.mRadius) {  }
 
 
 	/** Get the color of this sphere */
-	//__device__ Vector3 GetColor() const { return mColor; }
+	__device__ Vector3 GetColor() const { return mColor; }
 
 	//Compute the ray-sphere intersection using analitic solution
 	__device__ bool Intersect(const Ray& InRay, float InTMin, float InTMax,float& t)
 	{
-		const Vector3& oc = (InRay.mOrigin - mCenter);
+		const Vector3& oc = (InRay.mOrigin - GetCenterAtTime(InRay.mTime));
 		float a = InRay.mDirection.dot(InRay.mDirection);
 		float b = oc.dot(InRay.mDirection);
 		float c = oc.dot(oc) - mRadius * mRadius;
@@ -243,11 +279,14 @@ __global__ void RenderScene(const u32 ScreenWidth,const u32 ScreenHeight, float*
 
 	//Create a simple sphere list made by two spheres
 	const u32 kNumSpheres = 5;
-	Sphere SphereList[kNumSpheres] = { { {0.0f,0.0f,1.0f}, {0.0f,1.0f,0.0f},1.0f}
-					               , { {0.75f,0.0f,3.5f},{1.0f,0.0f,0.0f},1.0f} 
-	                               , { {1.5f,0.0f,6.0f},{1.0f,1.0f,0.0f},1.0f} 
-	                               , { {-0.5f,0.0f,0.0f}, {0.0f,0.0f,1.0f},1.0f } 
-	                               , { {-1.0f,0.0f,-1.0f}, {1.0f,0.0f,1.0f},1.0f } };
+	Sphere SphereList[kNumSpheres] = {
+		Sphere(Vector3(0.0f,0.0f,1.0f),Vector3(0.0f,0.5f,1.0f),Vector3(0.0f,1.0f,0.0f)),
+		Sphere(Vector3(0.75f,0.0f,3.5f),Vector3(0.75f,0.0f,3.5f),Vector3(1.0f,0.0f,0.0f)),
+		Sphere(Vector3(1.5f,0.0f,6.0f),Vector3(1.5f,0.35f,6.0f),Vector3(1.0f,1.0f,0.0f)),
+		Sphere(Vector3(-0.5f,0.0f,0.0f),Vector3(-0.5f,0.0f,0.0f),Vector3(0.0f,0.0f,1.0f)),
+		Sphere(Vector3(-1.0f,0.0f,-1.0f),Vector3(-1.0f,0.0f,-1.0f),Vector3(1.0f,0.0f,1.0f))
+	};
+
 
 	//Prepare two color
 	Vector3 Green(0.0f, 1.0f, 0.0f);  //Red color if we hit a primitive (in our case a sphere, but can be any type of primitive)
@@ -293,13 +332,17 @@ __global__ void RenderScene(const u32 ScreenWidth,const u32 ScreenHeight, float*
 		//Construct a ray in world space that originates from the camera
 		Ray WSRay(camera.GetCameraEye(), WSDir);
 
-		Ray DOFRay = GetDOFRay(WSRay, ApertureSize, FocalLength, &Seed0, &Seed1);
+		// Get Random time interval between 0-1
+		WSRay.mTime = GetRandom01(&Seed0, &Seed1);
+
+		//Ray DOFRay = GetDOFRay(WSRay, ApertureSize, FocalLength, &Seed0, &Seed1);
 
 		//Compute intersection and set a color
 		HitData OutHitData;
 
 		// Get the closest hit
-		bool Hit = GetClosestHit(DOFRay, 0.001f, FLT_MAX, OutHitData,SphereList,kNumSpheres);
+		//bool Hit = GetClosestHit(DOFRay, 0.001f, FLT_MAX, OutHitData,SphereList,kNumSpheres);
+		bool Hit = GetClosestHit(WSRay, 0.001f, FLT_MAX, OutHitData, SphereList, kNumSpheres);
 		
 		// Return the color for a given sample and accumulate the result
 		ColorResult += (Hit ? SphereList[OutHitData.mObjId].mColor : BkgColor);
