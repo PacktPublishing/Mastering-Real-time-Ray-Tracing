@@ -48,7 +48,7 @@ double f(double x)
 	return sqrt(1.0 - x*x);
 }
 
-// Here the the integration interval [a,b] is [0,1], therefore we evaluate the sample mean considering that (b-a) = (1-0) = 1
+// Here the integration interval [a,b] is [0,1], therefore we evaluate the sample mean considering that (b-a) = (1-0) = 1
 // In fact we use the basic Monte Carlo estimator (i.e. the one that uses a uniform probability density function pdf=1/(b-a))
 double SampleMeanMonteCarlo_EstimatePI(int N)
 {
