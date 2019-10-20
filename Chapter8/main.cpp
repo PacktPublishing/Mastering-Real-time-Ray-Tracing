@@ -38,7 +38,7 @@ double HitOrMissMonteCarlo_EstimatePI(int N)
 }
 
 
-// Here we consider a quarter of unit circle to compute the are
+// Here we consider a quarter of unit circle to compute the area
 
 // Use the sample mean approach
 
