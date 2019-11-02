@@ -6,6 +6,7 @@
 *.exp
 *.ilk
 *.lib
+!freeglut.lib
 *.bmp
 *.obj
 *.deps
@@ -24,3 +25,4 @@
 *.pch
 *.hlsl.h
 RaySampleFramework/RaytracingShaders.hlsl.h
+
