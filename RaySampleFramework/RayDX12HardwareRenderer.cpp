@@ -9,7 +9,7 @@
 #include "RaytracingShaders.hlsl.h"
 
 
-#define NAME_D3D12_OBJECT(x) SetName((x).Get(), L#x)
+#define NAME_D3D12_OBJECT(x) ((x).Get()->SetName(L#x))
 #define SizeOfInUint32(obj) ((sizeof(obj) - 1) / sizeof(u32) + 1)
 
 using namespace Microsoft::WRL;
@@ -124,26 +124,26 @@ protected:
 
 	void Allocate(ID3D12Device* device, UINT bufferSize, LPCWSTR resourceName = nullptr)
 	{
-		auto uploadHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+		auto UploadHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
-		auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
+		auto BufferDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
 		ThrowIfFailed(device->CreateCommittedResource(
-			&uploadHeapProperties,
+			&UploadHeapProperties,
 			D3D12_HEAP_FLAG_NONE,
-			&bufferDesc,
+			&BufferDesc,
 			D3D12_RESOURCE_STATE_GENERIC_READ,
 			nullptr,
 			IID_PPV_ARGS(&m_resource)));
 		m_resource->SetName(resourceName);
 	}
 
-	uint8_t* MapCpuWriteOnly()
+	u8* MapCpuWriteOnly()
 	{
-		uint8_t* mappedData;
+	    u8* MappedData;
 		// We don't unmap this until the app closes. Keeping buffer mapped for the lifetime of the resource is okay.
-		CD3DX12_RANGE readRange(0, 0);        // We do not intend to read from this resource on the CPU.
-		ThrowIfFailed(m_resource->Map(0, &readRange, reinterpret_cast<void**>(&mappedData)));
-		return mappedData;
+		CD3DX12_RANGE ReadRange(0, 0);        // We do not intend to read from this resource on the CPU.
+		ThrowIfFailed(m_resource->Map(0, &ReadRange, reinterpret_cast<void**>(&MappedData)));
+		return MappedData;
 	}
 };
 
@@ -250,39 +250,48 @@ void Ray_DX12HardwareRenderer::EnableDebugLayer()
 	// Always enable the debug layer before doing anything DX12 related
 	// so all possible errors generated while creating DX12 objects
 	// are caught by the debug layer.
-	ComPtr<ID3D12Debug> debugInterface;
-	ThrowIfFailed(D3D12GetDebugInterface(IID_PPV_ARGS(&debugInterface)));
-	debugInterface->EnableDebugLayer();
+	ComPtr<ID3D12Debug> DebugInterface;
+	ThrowIfFailed(D3D12GetDebugInterface(IID_PPV_ARGS(&DebugInterface)));
+	DebugInterface->EnableDebugLayer();
 #endif
 }
 
 
-u64 Ray_DX12HardwareRenderer::Signal( u64& InFenceValue )
-{
-	u64 FenceValueForSignal = ++InFenceValue;
-	ThrowIfFailed(mD3DCommandQueue->Signal(mFence.Get(), FenceValueForSignal));
-	return FenceValueForSignal;
-}
 
 
-void Ray_DX12HardwareRenderer::WaitForFenceValue( u64 InFenceValue
-					                           , HANDLE InFenceEvent
-										       ,  std::chrono::milliseconds InDuration )
+void Ray_DX12HardwareRenderer::WaitForPreviousFrame()
 {
-	if (mFence->GetCompletedValue() < InFenceValue)
+	// Signal and increment the fence value.
+	const u64 Fence = mFenceValue;
+	ThrowIfFailed(mD3DCommandQueue->Signal(mFence.Get(), Fence));
+	mFenceValue++;
+
+	// Wait until the previous frame is finished.
+	if (mFence->GetCompletedValue() < Fence)
 	{
-		ThrowIfFailed(mFence->SetEventOnCompletion(InFenceValue, InFenceEvent));
-		::WaitForSingleObject(InFenceEvent, static_cast<DWORD>(InDuration.count()));
+		ThrowIfFailed(mFence->SetEventOnCompletion(Fence, mFenceEvent));
+		WaitForSingleObject(mFenceEvent, INFINITE);
 	}
+
+	mBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
 }
 
 
-void Ray_DX12HardwareRenderer::Flush( u64& InFenceValue
-	                                , HANDLE InFenceEvent )
-{
-	u64 FenceValueForSignal = Signal(InFenceValue);
-	WaitForFenceValue(FenceValueForSignal, InFenceEvent);
 
+
+void Ray_DX12HardwareRenderer::FlushGPU()
+{
+	for (size_t i = 0; i < kMAX_BACK_BUFFER_COUNT; i++)
+	{
+		u64 FenceValueForSignal = ++mFrameFenceValues[i];
+		mD3DCommandQueue->Signal(mFences[i].Get(), FenceValueForSignal);
+		if (mFences[i]->GetCompletedValue() < mFrameFenceValues[i])
+		{
+			mFences[i]->SetEventOnCompletion(FenceValueForSignal, mFenceEvent);
+			WaitForSingleObject(mFenceEvent, INFINITE);
+		}
+	}
+	mBackBufferIndex = 0;
 }
 
 
@@ -324,11 +333,11 @@ void Ray_DX12HardwareRenderer::CreateRootSignatures()
 	{
 		CD3DX12_DESCRIPTOR_RANGE UAVDescriptor;
 		UAVDescriptor.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
-		CD3DX12_ROOT_PARAMETER rootParameters[GlobalRootSignatureParams::Count];
-		rootParameters[GlobalRootSignatureParams::OutputViewSlot].InitAsDescriptorTable(1, &UAVDescriptor);
-		rootParameters[GlobalRootSignatureParams::AccelerationStructureSlot].InitAsShaderResourceView(0);
-		CD3DX12_ROOT_SIGNATURE_DESC globalRootSignatureDesc(ARRAYSIZE(rootParameters), rootParameters);
-		SerializeAndCreateRaytracingRootSignature(globalRootSignatureDesc, &mRaytracingGlobalRootSignature);
+		CD3DX12_ROOT_PARAMETER RootParameters[GlobalRootSignatureParams::Count];
+		RootParameters[GlobalRootSignatureParams::OutputViewSlot].InitAsDescriptorTable(1, &UAVDescriptor);
+		RootParameters[GlobalRootSignatureParams::AccelerationStructureSlot].InitAsShaderResourceView(0);
+		CD3DX12_ROOT_SIGNATURE_DESC GlobalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
+		SerializeAndCreateRaytracingRootSignature(GlobalRootSignatureDesc, &mRaytracingGlobalRootSignature);
 	}
 
 	// Local Root Signature
@@ -336,9 +345,9 @@ void Ray_DX12HardwareRenderer::CreateRootSignatures()
 	{
 		CD3DX12_ROOT_PARAMETER RootParameters[LocalRootSignatureParams::Count];
 		RootParameters[LocalRootSignatureParams::ViewportConstantSlot].InitAsConstants(SizeOfInUint32(mRayGenCB), 0, 0);
-		CD3DX12_ROOT_SIGNATURE_DESC localRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
-		localRootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
-		SerializeAndCreateRaytracingRootSignature(localRootSignatureDesc, &mRaytracingLocalRootSignature);
+		CD3DX12_ROOT_SIGNATURE_DESC LocalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
+		LocalRootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
+		SerializeAndCreateRaytracingRootSignature(LocalRootSignatureDesc, &mRaytracingLocalRootSignature);
 	}
 
 }
@@ -439,7 +448,7 @@ void Ray_DX12HardwareRenderer::CreateDescriptorHeap()
 	DescriptorHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	DescriptorHeapDesc.NodeMask = 0;
 	mD3DDevice->CreateDescriptorHeap(&DescriptorHeapDesc, IID_PPV_ARGS(&mDescriptorHeap));
-	//NAME_D3D12_OBJECT(mDescriptorHeap);
+	NAME_D3D12_OBJECT(mDescriptorHeap);
 
 	mDescriptorSize = mD3DDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
@@ -571,7 +580,7 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 	mD3DCommandQueue->ExecuteCommandLists(ARRAYSIZE(commandLists), commandLists);
 
 	// Wait for GPU to finish as the locally created temporary GPU resources will get released once we go out of scope.
-	WaitForGpuToFinish();
+	FlushGPU();
 
 }
 
@@ -654,23 +663,62 @@ u32 Ray_DX12HardwareRenderer::AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE* CP
 void Ray_DX12HardwareRenderer::CreateRaytracingOutputResource()
 {	
 	// Create the output resource. The dimensions and format should match the swap-chain.
-	auto uavDesc = CD3DX12_RESOURCE_DESC::Tex2D(mBackBufferFormat, mWidth, mHeight, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-	auto defaultHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+	// Unordered Access View Desc creation
+	auto UAVResourceDesc = CD3DX12_RESOURCE_DESC::Tex2D(mBackBufferFormat, mWidth, mHeight, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-	ThrowIfFailed(mD3DDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &uavDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&mRayTracingOutputBuffer)));
-	//NAME_D3D12_OBJECT(mRayTracingOutputBuffer);
+	// Property flag for the heap descriptor that will contain this resource
+	auto DefaultHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
 
-	D3D12_CPU_DESCRIPTOR_HANDLE uavDescriptorHandle;	
-	mRaytracingOutputResourceUAVDescriptorHeapIndex = AllocateDescriptor(&uavDescriptorHandle, mRaytracingOutputResourceUAVDescriptorHeapIndex);
+	// ID3D12Resource creation, this resource will be an unordered access view
+	ThrowIfFailed(mD3DDevice->CreateCommittedResource(&DefaultHeapProperties, D3D12_HEAP_FLAG_NONE, &UAVResourceDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&mRayTracingOutputBuffer)));
+	NAME_D3D12_OBJECT(mRayTracingOutputBuffer);
 
+	// Allocate a descriptor and return a valid handle to it and a heap index for correct access into the decriptor table 
+	D3D12_CPU_DESCRIPTOR_HANDLE UAVDescriptorHandle;	
+	mRaytracingOutputResourceUAVDescriptorHeapIndex = AllocateDescriptor(&UAVDescriptorHandle, mRaytracingOutputResourceUAVDescriptorHeapIndex);
+
+	// Unordered access view desc
 	D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc = {};
 	
+	// Set the view dimension
 	UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-	mD3DDevice->CreateUnorderedAccessView(mRayTracingOutputBuffer.Get(), nullptr, &UAVDesc, uavDescriptorHandle);
+	mD3DDevice->CreateUnorderedAccessView(mRayTracingOutputBuffer.Get(), nullptr, &UAVDesc, UAVDescriptorHandle);
 	
 	mRaytracingOutputResourceUAVGpuDescriptor = CD3DX12_GPU_DESCRIPTOR_HANDLE(mDescriptorHeap->GetGPUDescriptorHandleForHeapStart(), mRaytracingOutputResourceUAVDescriptorHeapIndex, mDescriptorSize);
 }
+
+
+// Callback to recreate the output UAV if we resize the window
+void Ray_DX12HardwareRenderer::RecreateRaytracingOutputResource(u32 InWidth, u32 InHeight)
+{
+	// Create the output resource. The dimensions and format should match the swap-chain.
+
+	// Unordered Access View Desc creation
+	auto UAVResourceDesc = CD3DX12_RESOURCE_DESC::Tex2D(mBackBufferFormat, InWidth, InHeight, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+	// Property flag for the heap descriptor that will contain this resource
+	auto DefaultHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+
+	// ID3D12Resource creation, this resource will be an unordered access view
+	ThrowIfFailed(mD3DDevice->CreateCommittedResource(&DefaultHeapProperties, D3D12_HEAP_FLAG_NONE, &UAVResourceDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&mRayTracingOutputBuffer)));
+	NAME_D3D12_OBJECT(mRayTracingOutputBuffer);
+
+	// Allocate a descriptor and return a valid handle to it and a heap index for correct access into the decriptor table 
+	D3D12_CPU_DESCRIPTOR_HANDLE UAVDescriptorHandle;
+	mRaytracingOutputResourceUAVDescriptorHeapIndex = AllocateDescriptor(&UAVDescriptorHandle, mRaytracingOutputResourceUAVDescriptorHeapIndex);
+
+	// Unordered access view desc
+	D3D12_UNORDERED_ACCESS_VIEW_DESC UAVDesc = {};
+
+	// Set the view dimension
+	UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+	mD3DDevice->CreateUnorderedAccessView(mRayTracingOutputBuffer.Get(), nullptr, &UAVDesc, UAVDescriptorHandle);
+
+
+	mRaytracingOutputResourceUAVGpuDescriptor = CD3DX12_GPU_DESCRIPTOR_HANDLE(mDescriptorHeap->GetGPUDescriptorHandleForHeapStart(), mRaytracingOutputResourceUAVDescriptorHeapIndex, mDescriptorSize);
+}
+
 
 
 void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool InUseWarp)
@@ -690,6 +738,8 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 
 	//Let's create a command queue that can accept command lists of type DIRECT
 	mD3DCommandQueue = CreateCommandQueue(mD3DDevice, D3D12_COMMAND_LIST_TYPE_DIRECT);
+	NAME_D3D12_OBJECT(mD3DCommandQueue);
+	//mD3DCommandQueue.Get()->SetName(L"LOL");
 
 	//Swap chain creation
 	mSwapChain = CreateSwapChain(InHwnd, mD3DCommandQueue, InWidth, InHeight, kMAX_BACK_BUFFER_COUNT);
@@ -714,7 +764,14 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 	mD3DCommandList = CreateCommandList(mD3DDevice, mD3DCommandAllocator[mBackBufferIndex], D3D12_COMMAND_LIST_TYPE_DIRECT);
 
 
-	//Create the dx12 fence
+	// Create fences for GPU flush
+	for (u32 i=0;i<kMAX_BACK_BUFFER_COUNT;++i)
+	{
+		mFences[i] = CreateFence(mD3DDevice);;
+	}
+
+
+	// Create the dx12 fence
 	mFence = CreateFence(mD3DDevice);
 	
 	//Create the CPU event that we'll use to stall the CPU on the fence value (the fence value will get signaled from the GPU as soon as the GPU will reach the fence)	
@@ -752,7 +809,8 @@ void Ray_DX12HardwareRenderer::Destroy()
 {
 
 	// Make sure the command queue has finished all commands before closing.
-	Flush(mFenceValue, mFenceEvent);
+	FlushGPU();
+	//WaitForPreviousFrame();
 
 	//Close the CPU event 
 	CloseHandle(mFenceEvent);
@@ -769,22 +827,22 @@ void Ray_DX12HardwareRenderer::Resize(u32 InWidth, u32 InHeight)
 	if (mViewport.Width != InWidth || mViewport.Height != InHeight)
 	{
 		// Don't allow 0 size swap chain back buffers.
-		u32 Width = std::max(1u, InWidth);
-		u32 Height = std::max(1u, InHeight);
+		const u32 Width = std::max(1u, InWidth);
+		const u32 Height = std::max(1u, InHeight);
 		
 		mViewport.Width = static_cast<float>(Width);
 		mViewport.Height = static_cast<float>(Height);
 
 		// Flush the GPU queue to make sure the swap chain's back buffers
 		// are not being referenced by an in-flight command list.
-		Flush(mFenceValue, mFenceEvent);
-
+		FlushGPU();
+		
+		// Ready to release any reference to the back buffers
 		for (int i = 0; i < kMAX_BACK_BUFFER_COUNT; ++i)
 		{
 			// Any references to the back buffers must be released
 			// before the swap chain can be resized.
-			mRenderTargets[i].Reset();
-			mFrameFenceValues[i] = mFrameFenceValues[mBackBufferIndex];
+			mRenderTargets[i].Reset();			 
 		}
 
 		DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
@@ -794,7 +852,11 @@ void Ray_DX12HardwareRenderer::Resize(u32 InWidth, u32 InHeight)
 
 		mBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
 
+		// Update the render target views to match the new resized viewport 
 		UpdateRenderTargetViews(mD3DDevice, mSwapChain, mRTVDescriptorHeap);
+
+		// Recreate the ray tracing output buffer since when we copy the contento onto the backbuffer for on-screen visualization, sizes must match!
+		RecreateRaytracingOutputResource(Width, Height);
 	}
 }
 
@@ -927,6 +989,7 @@ ComPtr<ID3D12CommandQueue> Ray_DX12HardwareRenderer::CreateCommandQueue(ComPtr<I
 	desc.NodeMask = 0;
 
 	ThrowIfFailed(InDevice->CreateCommandQueue(&desc, IID_PPV_ARGS(&d3d12CommandQueue)));
+	
 
 	return d3d12CommandQueue;
 }
@@ -1062,15 +1125,10 @@ ComPtr<ID3D12CommandAllocator> Ray_DX12HardwareRenderer::CreateCommandAllocator(
 
 
 
-//ComPtr<ID3D12GraphicsCommandList> Ray_DX12HardwareRenderer::CreateCommandList(ComPtr<ID3D12Device2> InDevice
-//	, ComPtr<ID3D12CommandAllocator> InCommandAllocator
-//	, D3D12_COMMAND_LIST_TYPE InType)
-
 ComPtr<ID3D12GraphicsCommandList4> Ray_DX12HardwareRenderer::CreateCommandList(ComPtr<ID3D12Device2> InDevice
 		, ComPtr<ID3D12CommandAllocator> InCommandAllocator
 		, D3D12_COMMAND_LIST_TYPE InType)
 {
-	//ComPtr<ID3D12GraphicsCommandList> CommandList;
 	ComPtr<ID3D12GraphicsCommandList4> CommandList;
 
 	//Create a command list that supports ray tracing
@@ -1176,12 +1234,6 @@ void Ray_DX12HardwareRenderer::Render()
 
 void Ray_DX12HardwareRenderer::EndFrame()
 {
-	auto BackBuffer = mRenderTargets[mBackBufferIndex];
-
-//	CD3DX12_RESOURCE_BARRIER Barrier = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-
-//	mD3DCommandList->ResourceBarrier(1, &Barrier);
-
 	//After transitioning to the correct state, the command list that contains the resource transition barrier must be executed on the command queue.
 	ThrowIfFailed(mD3DCommandList->Close());
 
@@ -1194,13 +1246,8 @@ void Ray_DX12HardwareRenderer::EndFrame()
 
 	ThrowIfFailed(mSwapChain->Present(SyncInterval, PresentFlags));
 
-	mFrameFenceValues[mBackBufferIndex] = Signal(mFenceValue);
-
-	//After signaling the command queue, the index of the current back buffer is updated.
-	mBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
-
-	//Before overwriting the contents of the current back buffer with the content of the next frame, the CPU thread is stalled using the WaitForFenceValue function described earlier.
-	WaitForFenceValue(mFrameFenceValues[mBackBufferIndex], mFenceEvent);
+	// Wait for the  previous frame to finish
+	WaitForPreviousFrame();
 }
 
 

@@ -57,25 +57,6 @@ public:
 
 	virtual void Resize(u32 InWidth, u32 InHeight) override;
 
-
-	virtual u64 Signal(u64& InFenceValue) override;
-
-
-	virtual void WaitForFenceValue(u64 InFenceValue
-		                 , HANDLE InFenceEvent
-		                 , std::chrono::milliseconds InDuration = std::chrono::milliseconds::max()) override;
-
-
-	
-	// It is sometimes useful to wait until all previously executed commands have finished executing before doing something
-	// (for example, resizing the swap chain buffers requires any references to the buffers to be released).
-	// For this, the Flush function is used to ensure the GPU has finished processing all commands before continuing. 
-    
-	/** Flush the GPU  */
-	virtual void Flush(u64& InFenceValue
-		             , HANDLE InFenceEvent) override;
-
-
 	//NOTE: API  specific code must eventually go to the base class as we generalize more 
 
     /** Call this method before to begin a frame     */
@@ -90,34 +71,24 @@ public:
 	virtual void EndFrame() override;
 
 
-	/** Wait for GPU to finish any pending work before to proceed*/
-	virtual void WaitForGpuToFinish() override
-	{
-		if (mD3DCommandQueue && mFence && mFenceEvent != nullptr)
-		{
-			// Schedule a Signal command in the GPU queue.
-			u64 fenceValue = mFrameFenceValues[mBackBufferIndex];
-			if (SUCCEEDED(mD3DCommandQueue->Signal(mFence.Get(), fenceValue)))
-			{
-				// Wait until the Signal has been processed.
-				if ( SUCCEEDED( mFence->SetEventOnCompletion(fenceValue, mFenceEvent) ) )
-				{
-					WaitForSingleObjectEx(mFenceEvent, INFINITE, FALSE);
-
-					// Increment the fence value for the current frame.
-					mFrameFenceValues[mBackBufferIndex]++;
-				}
-			}
-		}
-	}
-
-
 	// D3D12 specific methods
 	/** Get the D3D command list */
-	//Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> GetCommandList() const { return mD3DCommandList; }
 	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> GetCommandList() const { return mD3DCommandList; }
 
 private:
+
+
+	/** Wait for the previous frame to finish */
+	void WaitForPreviousFrame();
+
+
+    // It is sometimes useful to wait until all previously executed commands have finished executing before doing something
+    // (for example, resizing the swap chain buffers requires any references to the buffers to be released).
+    // For this, the Flush function is used to ensure the GPU has finished processing all commands for each backbuffer before continuing. 
+
+	/** Wait for the GPU to go idle */
+	void FlushGPU();
+
 
 	//convenient name alias for verbose microsoft WRL ComPtr object
 	template<typename T>
@@ -204,6 +175,9 @@ private:
 	// Create an output 2D texture to store the raytracing result to.
 	void CreateRaytracingOutputResource();
 
+	// Callback to recreate the output UAV if we resize the window
+	void RecreateRaytracingOutputResource(u32 InWidth, u32 InHeight);
+
 	// Used to copy the ray traced results to backbuffer in order to display them
 	void CopyRayTracingOutputToBackBuffer();
 
@@ -219,6 +193,7 @@ private:
 	//DX12 specific interfaces/////////////////////////////////
 
 	static const size_t kMAX_BACK_BUFFER_COUNT = 3;
+
 
 	/** Do we support tearing ? */
 	bool IsTearingSupported = false;
@@ -269,10 +244,15 @@ private:
 	// Synchronization objects
 
 	/** Fence objects used to manage presentation */
+
+	/** Array of fences. One for each backbuffer that has potential work in flight */
+	ComPtr<ID3D12Fence> mFences[kMAX_BACK_BUFFER_COUNT];
+	
+	/** Single fence used just to signal a given cmd list */
 	ComPtr<ID3D12Fence> mFence;
 
 	/** Fence values for each swap chain processed render target */
-	u64 mFrameFenceValues[kMAX_BACK_BUFFER_COUNT];
+	u64 mFrameFenceValues[kMAX_BACK_BUFFER_COUNT] = { 0 };
 
 	/** Fence value used during synchronization */
 	u64 mFenceValue = 0;
