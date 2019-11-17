@@ -342,28 +342,31 @@ void Ray_DX12HardwareRenderer::CreateRootSignatures()
 	// Global Root Signature
     // This is a root signature that is shared across all raytracing shaders invoked during a DispatchRays() call.
 	{
-		CD3DX12_DESCRIPTOR_RANGE DescriptorRangeUAV;		
+		CD3DX12_DESCRIPTOR_RANGE1 DescriptorRangeUAV;	
+		CD3DX12_DESCRIPTOR_RANGE1 DescriptorRangeCBV;
 
 		// We want to define a bounding convention for descriptor that fall in the range of UAV types.
 		DescriptorRangeUAV.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
 	
 		
-		CD3DX12_ROOT_PARAMETER RootParameters[GlobalRootSignatureParams::Count] = {};
+		CD3DX12_ROOT_PARAMETER1 RootParameters[GlobalRootSignatureParams::Count] = {};
 		
 		// UAV used to store ray tracing results (color buffer that will be used by the ray tracer to store the color)
 		RootParameters[GlobalRootSignatureParams::OutputViewSlot].InitAsDescriptorTable(1, &DescriptorRangeUAV);
 
+
 		// Scene Constant buffer 
-		RootParameters[GlobalRootSignatureParams::SceneConstantBuffer].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);
+		DescriptorRangeCBV.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+		RootParameters[GlobalRootSignatureParams::SceneConstantBuffer].InitAsDescriptorTable(1, &DescriptorRangeCBV);
+
+		//RootParameters[GlobalRootSignatureParams::SceneConstantBuffer].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);				
 
 		// Parameter mapping for the Top Level Acceleration structure passed for ray tracing 
 		RootParameters[GlobalRootSignatureParams::AccelerationStructureSlot].InitAsShaderResourceView(0);
 		
-		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC GlobalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
-		
+		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC GlobalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);		
 		SerializeAndCreateRaytracingRootSignature(GlobalRootSignatureDesc, &mRaytracingGlobalRootSignature, featureData.HighestVersion);
 		NAME_D3D12_OBJECT(mRaytracingGlobalRootSignature);
-		
 	}
 
 	// Local Root Signature
@@ -470,7 +473,7 @@ void Ray_DX12HardwareRenderer::CreateDescriptorHeaps()
 	// 1 - raytracing output texture SRV
 	// 2 - bottom and top level acceleration structure fallback wrapped pointers
 	// 1 - Constant buffer (scene constants)
-	DescriptorHeapDesc.NumDescriptors = 4;
+	DescriptorHeapDesc.NumDescriptors = 2;
 	DescriptorHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	DescriptorHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	DescriptorHeapDesc.NodeMask = 0;
@@ -830,22 +833,21 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 	CD3DX12_RANGE readRange(0, 0);        // We do not intend to read from this resource on the CPU.
 	ThrowIfFailed(mSceneConstantsCB->Map(0, &readRange, reinterpret_cast<void**>(&mSceneConstantsCB_DataPtr)));
 	
-
 	// Create the constant buffer views (for now just the one related to scene constants
 	D3D12_CONSTANT_BUFFER_VIEW_DESC CBVDesc = {};
 	CBVDesc.SizeInBytes = CBufferSize;
-
 	CBVDesc.BufferLocation = mSceneConstantsCB->GetGPUVirtualAddress();
 
 	// Now we need to know where to put the constant buffer, therefore we provide for the correct heap handle
 	// This handle is a CPU side handle that we use like a pointer (it is not a pointer obviously, but a safest way to reference a resource preventing from erroneous dereferencing)
 	auto DescriptorHeapCpuBase = mCBVSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	auto CBufferCPUHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(DescriptorHeapCpuBase, 3, mDescriptorSize);
+	auto CBufferCPUHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(DescriptorHeapCpuBase);
+	CBufferCPUHandle.Offset(mDescriptorSize);
 
 	// We cache the GPU handle which will be the one we will use to set the constat buffer
-	mSceneConstantsHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mCBVSRVDescriptorHeap->GetGPUDescriptorHandleForHeapStart(),3, mDescriptorSize);
 	mD3DDevice->CreateConstantBufferView(&CBVDesc, CBufferCPUHandle);
-
+	mSceneConstantsHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mCBVSRVDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+	mSceneConstantsHandle.Offset(mDescriptorSize);
 
 
 	// Create fences for GPU flush!
@@ -1231,7 +1233,7 @@ void Ray_DX12HardwareRenderer::BeginFrame(float* InClearColor)
 	// TODO: remove cbuffer update from here (must go in update section of the sample at most) ///
 	SceneConstants SceneCB = { };
 
-	SceneCB.CameraPosition = { 0.0f,0.0f,-5.5f, 0.0f };
+	SceneCB.CameraPosition = { 0.0f,0.0f,-2.5f, 0.0f };
 
 	memcpy(mSceneConstantsCB_DataPtr, &SceneCB, sizeof(SceneConstants));
 	//////////////////////////////////////////////////////////////////////////////////////////////
@@ -1321,9 +1323,11 @@ void Ray_DX12HardwareRenderer::Render()
 
 	// Top level acceleration structure is set as a Shader Resource View
 	CommandList->SetComputeRootShaderResourceView(GlobalRootSignatureParams::AccelerationStructureSlot, mTLAS->GetGPUVirtualAddress());
-
+	
 	// Scene constant buffer
-	CommandList->SetComputeRootConstantBufferView(GlobalRootSignatureParams::SceneConstantBuffer, mSceneConstantsCB->GetGPUVirtualAddress());
+	CommandList->SetComputeRootDescriptorTable(GlobalRootSignatureParams::SceneConstantBuffer, mSceneConstantsHandle);
+	
+	//CommandList->SetComputeRootConstantBufferView(GlobalRootSignatureParams::SceneConstantBuffer, mSceneConstantsCB->GetGPUVirtualAddress());
 	
 	// Then we are ready to dispatch rays
 	DispatchRays(CommandList, mDXRStateObject.Get(), &dispatchDesc);
