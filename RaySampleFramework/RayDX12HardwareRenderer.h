@@ -2,46 +2,10 @@
 
 #include "RayPCH.h"
 #include "RayIHardwareRenderer.h"
+#include "ShaderParameters.h"
+
 
 #include <chrono>
-
-//TODO: refactor this. Maybe move it to another header file
-struct Viewport
-{
-	float mLeft;
-	float mTop;
-	float mRight;
-	float mBottom;
-};
-
-//TODO: refactor this. Maybe move it to another header file
-struct RayGenCB
-{
-	Viewport mViewport;
-	Viewport mStencil;
-};
-
-//TODO: Refactor this
-namespace GlobalRootSignatureParams 
-{
-	enum Value 
-	{
-		OutputViewSlot = 0,           //UAV slot
-		AccelerationStructureSlot,    //Acceleration structure slot
-		Count                         //Total number of global signature in use 
-	};
-}
-
-
-//TODO: Refactor this 
-namespace LocalRootSignatureParams 
-{
-	enum Value 
-	{
-		ViewportConstantSlot = 0,    //CB slot (we pass viewport)
-		Count
-	};
-}
 
 
 
@@ -159,8 +123,8 @@ private:
 	// Ray tracing PSO creation (we eventually manage PSO with some kind of factory)
 	void CreateRaytracingPipelineStateObject();
 
-	// Create a heap for descriptors for ray tracing resource 
-	void CreateDescriptorHeap();
+	// Create all the descriptor heap that we need here 
+	void CreateDescriptorHeaps();
 
 	// Build geometry 
 	void BuildGeometry();
@@ -182,7 +146,7 @@ private:
 	void CopyRayTracingOutputToBackBuffer();
 
 
-	void SerializeAndCreateRaytracingRootSignature(D3D12_ROOT_SIGNATURE_DESC& Desc, ComPtr<ID3D12RootSignature>* RootSig);
+	void SerializeAndCreateRaytracingRootSignature(D3D12_VERSIONED_ROOT_SIGNATURE_DESC& Desc, ComPtr<ID3D12RootSignature>* RootSig, D3D_ROOT_SIGNATURE_VERSION RootSignatureVersion);
 	void CreateLocalRootSignatureSubobjects(CD3D12_STATE_OBJECT_DESC* RaytracingPipeline);
 
 	u32 AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE* CPUDescriptor, u32 DescriptorIndexToUse);
@@ -209,19 +173,17 @@ private:
 
 
 
-	/** D3D12 Device */
-	//ComPtr<ID3D12Device2> mD3DDevice;
-	ComPtr<ID3D12Device5> mD3DDevice;   //device for ray tracing
+	/** D3D12 Device */	
+	ComPtr<ID3D12Device5> mD3DDevice;                   //device for ray tracing
 
 	/** D3D12 command queue */
 	ComPtr<ID3D12CommandQueue> mD3DCommandQueue;
 
-	/** D3D12 command list */
-	//ComPtr<ID3D12GraphicsCommandList> mD3DCommandList;
-	ComPtr<ID3D12GraphicsCommandList4> mD3DCommandList;    //cmd list for ray tracing
+	/** D3D12 command list */	
+	ComPtr<ID3D12GraphicsCommandList4> mD3DCommandList; //cmd list for ray tracing
 
 	/** DirectX Ray tracing state object */
-	ComPtr<ID3D12StateObjectPrototype> mDXRStateObject;
+	ComPtr<ID3D12StateObject> mDXRStateObject;
 
 	/** D3D12 Command allocator */
 	ComPtr<ID3D12CommandAllocator> mD3DCommandAllocator[kMAX_BACK_BUFFER_COUNT];

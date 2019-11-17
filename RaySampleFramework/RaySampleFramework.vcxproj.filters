@@ -10,6 +10,7 @@
     <ClInclude Include="RayDX12HardwareRenderer.h" />
     <ClInclude Include="FrameManager.h" />
     <ClInclude Include="..\Utils\fbxmodelloader.h" />
+    <ClInclude Include="ShaderParameters.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="RayPCH.cpp" />

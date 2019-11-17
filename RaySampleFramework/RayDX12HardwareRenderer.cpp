@@ -316,11 +316,12 @@ HANDLE Ray_DX12HardwareRenderer::CreateEventHandle()
 }
 
 // Helper method used by the CreateRootSignatures method to create global and local root signature
-void Ray_DX12HardwareRenderer::SerializeAndCreateRaytracingRootSignature(D3D12_ROOT_SIGNATURE_DESC& Desc, ComPtr<ID3D12RootSignature>* RootSig)
+void Ray_DX12HardwareRenderer::SerializeAndCreateRaytracingRootSignature(D3D12_VERSIONED_ROOT_SIGNATURE_DESC& Desc, ComPtr<ID3D12RootSignature>* RootSig,D3D_ROOT_SIGNATURE_VERSION RootSignatureVersion)
 {
 	ComPtr<ID3DBlob> Blob;
 	ComPtr<ID3DBlob> Error;
-	ThrowIfFailed(D3D12SerializeRootSignature(&Desc, D3D_ROOT_SIGNATURE_VERSION_1, &Blob, &Error) , Error ? static_cast<wchar_t*>(Error->GetBufferPointer()) : nullptr);
+
+	ThrowIfFailed(D3DX12SerializeVersionedRootSignature(&Desc, RootSignatureVersion, &Blob, &Error) , Error ? static_cast<wchar_t*>(Error->GetBufferPointer()) : nullptr);
 	ThrowIfFailed(mD3DDevice->CreateRootSignature(1, Blob->GetBufferPointer(), Blob->GetBufferSize(), IID_PPV_ARGS(&(*RootSig))));
 }
 
@@ -328,26 +329,53 @@ void Ray_DX12HardwareRenderer::SerializeAndCreateRaytracingRootSignature(D3D12_R
 void Ray_DX12HardwareRenderer::CreateRootSignatures()
 {
 
+	D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
+
+	// This is the highest version the sample supports. If CheckFeatureSupport succeeds, the HighestVersion returned will not be greater than this.
+	featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+
+	if (FAILED(mD3DDevice->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData))))
+	{
+		featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
+	}
+
 	// Global Root Signature
     // This is a root signature that is shared across all raytracing shaders invoked during a DispatchRays() call.
 	{
-		CD3DX12_DESCRIPTOR_RANGE UAVDescriptor;
-		UAVDescriptor.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+		CD3DX12_DESCRIPTOR_RANGE DescriptorRangeUAV;
+
+		// We want to define a bounding convention for descriptor that fall in the range of UAV types.
+		DescriptorRangeUAV.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+		
+		
 		CD3DX12_ROOT_PARAMETER RootParameters[GlobalRootSignatureParams::Count];
-		RootParameters[GlobalRootSignatureParams::OutputViewSlot].InitAsDescriptorTable(1, &UAVDescriptor);
+		
+		// UAV used to store ray tracing results (color buffer that will be used by the ray tracer to store the color)
+		RootParameters[GlobalRootSignatureParams::OutputViewSlot].InitAsDescriptorTable(1, &DescriptorRangeUAV);
+
+		// Parameter mapping for the Top Level Acceleration structure passed for ray tracing 
 		RootParameters[GlobalRootSignatureParams::AccelerationStructureSlot].InitAsShaderResourceView(0);
-		CD3DX12_ROOT_SIGNATURE_DESC GlobalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
-		SerializeAndCreateRaytracingRootSignature(GlobalRootSignatureDesc, &mRaytracingGlobalRootSignature);
+		
+		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC GlobalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
+		
+		SerializeAndCreateRaytracingRootSignature(GlobalRootSignatureDesc, &mRaytracingGlobalRootSignature, featureData.HighestVersion);
 	}
 
 	// Local Root Signature
 	// This is a root signature that enables a shader to have unique arguments that come from shader tables.
 	{
 		CD3DX12_ROOT_PARAMETER RootParameters[LocalRootSignatureParams::Count];
+
+
 		RootParameters[LocalRootSignatureParams::ViewportConstantSlot].InitAsConstants(SizeOfInUint32(mRayGenCB), 0, 0);
-		CD3DX12_ROOT_SIGNATURE_DESC LocalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
-		LocalRootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
-		SerializeAndCreateRaytracingRootSignature(LocalRootSignatureDesc, &mRaytracingLocalRootSignature);
+		
+		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC LocalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
+		
+		// D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE - Denies the domain shader access to the root signature.
+		// TODO: Check how this flag is related to ray tracing pipeline
+		LocalRootSignatureDesc.Desc_1_1.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
+		
+		SerializeAndCreateRaytracingRootSignature(LocalRootSignatureDesc, &mRaytracingLocalRootSignature, featureData.HighestVersion);
 	}
 
 }
@@ -414,6 +442,7 @@ void Ray_DX12HardwareRenderer::CreateRaytracingPipelineStateObject()
 
 	// Local root signature and shader association
 	CreateLocalRootSignatureSubobjects(&RaytracingPipeline);
+
 	// This is a root signature that enables a shader to have unique arguments that come from shader tables.
 
 	// Global root signature
@@ -431,15 +460,17 @@ void Ray_DX12HardwareRenderer::CreateRaytracingPipelineStateObject()
 	PipelineConfig->Config(MaxRecursionDepth);
 
 
-	// TODO: mDXRStateObject is of type ID3D12StateObjectPrototype. Please verify that this object is not temporary in relation to the DXR API definition
+	// Create a ray tracing state object for the DXR pipeline
 	ThrowIfFailed(mD3DDevice->CreateStateObject(RaytracingPipeline, IID_PPV_ARGS(&mDXRStateObject)), L"Couldn't create DirectX Raytracing state object.\n");
 }
 
 // Create a heap for descriptors for ray tracing resource 
-void Ray_DX12HardwareRenderer::CreateDescriptorHeap()
+void Ray_DX12HardwareRenderer::CreateDescriptorHeaps()
 {
 	D3D12_DESCRIPTOR_HEAP_DESC DescriptorHeapDesc = {};
 	
+	// Create descriptor heap for CBV/SRV and UAV
+
 	// Allocate a heap for 3 descriptors:
 	// 2 - bottom and top level acceleration structure fallback wrapped pointers
 	// 1 - raytracing output texture SRV
@@ -450,8 +481,18 @@ void Ray_DX12HardwareRenderer::CreateDescriptorHeap()
 	mD3DDevice->CreateDescriptorHeap(&DescriptorHeapDesc, IID_PPV_ARGS(&mDescriptorHeap));
 	NAME_D3D12_OBJECT(mDescriptorHeap);
 
+	// Get the size of each descriptor on this hardware
 	mDescriptorSize = mD3DDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+    // Create descriptor heap to store each RTV relative to each swapchain backbuffer (render target view)
+	
+	D3D12_DESCRIPTOR_HEAP_DESC Desc = {};
+	Desc.NumDescriptors = kMAX_BACK_BUFFER_COUNT;
+	Desc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+	ThrowIfFailed(mD3DDevice->CreateDescriptorHeap(&Desc, IID_PPV_ARGS(&mRTVDescriptorHeap)));
+
+	// Get the size of each descriptor on this hardware
+	mRTVDescriptorSize = mD3DDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV); 
 }
 
 // TODO: we build geometry in the hardware renderer for now, but we might move this elsewhere due to a refactor
@@ -738,46 +779,59 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 
 	//Let's create a command queue that can accept command lists of type DIRECT
 	mD3DCommandQueue = CreateCommandQueue(mD3DDevice, D3D12_COMMAND_LIST_TYPE_DIRECT);
-	NAME_D3D12_OBJECT(mD3DCommandQueue);
-	//mD3DCommandQueue.Get()->SetName(L"LOL");
+	NAME_D3D12_OBJECT(mD3DCommandQueue);	
 
 	//Swap chain creation
 	mSwapChain = CreateSwapChain(InHwnd, mD3DCommandQueue, InWidth, InHeight, kMAX_BACK_BUFFER_COUNT);
 
-	//Get the index of the current swapchain backmbuffer
-	mBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
 
-	//Create a descriptor heap of type RTV for the swap chain back buffers
-	mRTVDescriptorHeap = CreateDescriptorHeap(mD3DDevice, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,kMAX_BACK_BUFFER_COUNT);
+	// Create descriptor heaps used by this hardware renderer
+	CreateDescriptorHeaps();
 
-	//Get the size of the just created RTV heap 
-	mRTVDescriptorSize = mD3DDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+	
+	// Create the actual render target view into the descriptor heap we've just created
+	CD3DX12_CPU_DESCRIPTOR_HANDLE RTVHandle(mRTVDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+	for (int i = 0; i < kMAX_BACK_BUFFER_COUNT; ++i)
+	{
+		ComPtr<ID3D12Resource> backBuffer;
+		ThrowIfFailed(mSwapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer)));
 
-	//Update render target views
-	UpdateRenderTargetViews(mD3DDevice, mSwapChain, mRTVDescriptorHeap);
+		mD3DDevice->CreateRenderTargetView(backBuffer.Get(), nullptr, RTVHandle);
 
-	//Command list and command allocator creation
+		mRenderTargets[i] = backBuffer;
+
+		RTVHandle.Offset(mRTVDescriptorSize);
+	}
+
+	// Command list and command allocator creation
+
+	// We need to create as many command allocator as are the buffer that we want the GPU to submit work for
 	for (int i = 0; i < kMAX_BACK_BUFFER_COUNT; ++i)
 	{
 		mD3DCommandAllocator[i] = CreateCommandAllocator(mD3DDevice, D3D12_COMMAND_LIST_TYPE_DIRECT);
 	}
+
+	// Create a command list for this application (i.e. application is single threaded therefore a single command list is enough in this case)
 	mD3DCommandList = CreateCommandList(mD3DDevice, mD3DCommandAllocator[mBackBufferIndex], D3D12_COMMAND_LIST_TYPE_DIRECT);
 
 
-	// Create fences for GPU flush
+	// Create fences for GPU flush!
+	// If we queue N frames on the GPU, we want to be sure that any work that is in flight on any of the N buffers will be completely done.
+	// So basically we need to track a fence for each in flight work in each one of the N buffer.
 	for (u32 i=0;i<kMAX_BACK_BUFFER_COUNT;++i)
 	{
 		mFences[i] = CreateFence(mD3DDevice);;
 	}
 
 
+	// One fence is enough to track that the previous in flight work for the previous frame is done.
 	// Create the dx12 fence
 	mFence = CreateFence(mD3DDevice);
 	
 	//Create the CPU event that we'll use to stall the CPU on the fence value (the fence value will get signaled from the GPU as soon as the GPU will reach the fence)	
 	mFenceEvent = CreateEventHandle();
-
 	
+
 	// TODO: A heavy refactoring is needed for the ray tracing object creation and management part.
 	// In particular we expect to manage heap descriptors, PSO etc. in separated systems/classes. This should promote more modularity and let the code to be more maintainable.
 
@@ -788,9 +842,6 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 
 	// Create a raytracing pipeline state object which defines the binding of shaders, state and resources to be used during raytracing.
 	CreateRaytracingPipelineStateObject();
-
-	// Create a heap for descriptors.
-	CreateDescriptorHeap();
 
 	// Build geometry to be used in the sample.
 	BuildGeometry();
@@ -810,7 +861,6 @@ void Ray_DX12HardwareRenderer::Destroy()
 
 	// Make sure the command queue has finished all commands before closing.
 	FlushGPU();
-	//WaitForPreviousFrame();
 
 	//Close the CPU event 
 	CloseHandle(mFenceEvent);
@@ -865,7 +915,7 @@ void Ray_DX12HardwareRenderer::Resize(u32 InWidth, u32 InHeight)
 ComPtr<IDXGIAdapter4> Ray_DX12HardwareRenderer::GetAdapter(bool InUseWarp)
 {
 	ComPtr<IDXGIFactory4> dxgiFactory;
-	UINT createFactoryFlags = 0;
+	u32 createFactoryFlags = 0;
 #if defined(_DEBUG)
 	createFactoryFlags = DXGI_CREATE_FACTORY_DEBUG;
 #endif
@@ -906,14 +956,8 @@ ComPtr<IDXGIAdapter4> Ray_DX12HardwareRenderer::GetAdapter(bool InUseWarp)
 }
 
 
-//ComPtr<ID3D12Device2> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter4> InAdapter)
 ComPtr<ID3D12Device5> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter4> InAdapter)
 {
-	//ID3D12Device2 is not for ray tracing with DXR
-	//ComPtr<ID3D12Device2> d3d12Device2;
-
-	//ThrowIfFailed(D3D12CreateDevice(InAdapter.Get(),D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d3d12Device2)));
-
 	//Ray tracing capable device creation
 	ComPtr<ID3D12Device5> d3d12Device5;
 
@@ -938,17 +982,14 @@ ComPtr<ID3D12Device5> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter
 	// Enable debug messages in debug mode.
 #if defined(_DEBUG)
 	ComPtr<ID3D12InfoQueue> pInfoQueue;
-	//if (SUCCEEDED(d3d12Device2.As(&pInfoQueue)))
 	if (SUCCEEDED(d3d12Device5.As(&pInfoQueue)))
 	{
 		pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
 		pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
 		pInfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
 
-		// Suppress whole categories of messages
-	 //D3D12_MESSAGE_CATEGORY Categories[] = {};
 
-	 // Suppress messages based on their severity level
+	    // Suppress messages based on their severity level
 		D3D12_MESSAGE_SEVERITY Severities[] =
 		{
 			D3D12_MESSAGE_SEVERITY_INFO
@@ -962,8 +1003,6 @@ ComPtr<ID3D12Device5> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter
 		};
 
 		D3D12_INFO_QUEUE_FILTER NewFilter = {};
-		//NewFilter.DenyList.NumCategories = _countof(Categories);
-		//NewFilter.DenyList.pCategoryList = Categories;
 		NewFilter.DenyList.NumSeverities = _countof(Severities);
 		NewFilter.DenyList.pSeverityList = Severities;
 		NewFilter.DenyList.NumIDs = _countof(DenyIds);
@@ -973,14 +1012,13 @@ ComPtr<ID3D12Device5> Ray_DX12HardwareRenderer::CreateDevice(ComPtr<IDXGIAdapter
 	}
 #endif
 
-	//return d3d12Device2;
 	return d3d12Device5;
 }
 
 
 ComPtr<ID3D12CommandQueue> Ray_DX12HardwareRenderer::CreateCommandQueue(ComPtr<ID3D12Device2> InDevice, D3D12_COMMAND_LIST_TYPE InType)
 {
-	ComPtr<ID3D12CommandQueue> d3d12CommandQueue;
+	ComPtr<ID3D12CommandQueue> D3D12CommandQueue;
 
 	D3D12_COMMAND_QUEUE_DESC desc = {};
 	desc.Type = InType;
@@ -988,10 +1026,10 @@ ComPtr<ID3D12CommandQueue> Ray_DX12HardwareRenderer::CreateCommandQueue(ComPtr<I
 	desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 	desc.NodeMask = 0;
 
-	ThrowIfFailed(InDevice->CreateCommandQueue(&desc, IID_PPV_ARGS(&d3d12CommandQueue)));
+	ThrowIfFailed(InDevice->CreateCommandQueue(&desc, IID_PPV_ARGS(&D3D12CommandQueue)));
 	
 
-	return d3d12CommandQueue;
+	return D3D12CommandQueue;
 }
 
 
@@ -1073,6 +1111,9 @@ ComPtr<IDXGISwapChain4> Ray_DX12HardwareRenderer::CreateSwapChain(HWND InhWnd
 
 	ThrowIfFailed(swapChain1.As(&dxgiSwapChain4));
 
+	//Get the index of the current swapchain backmbuffer
+	mBackBufferIndex = dxgiSwapChain4->GetCurrentBackBufferIndex();
+
 	return dxgiSwapChain4;
 }
 
@@ -1081,6 +1122,8 @@ ComPtr<ID3D12DescriptorHeap> Ray_DX12HardwareRenderer::CreateDescriptorHeap(ComP
 	, D3D12_DESCRIPTOR_HEAP_TYPE InType
 	, u32 InNumDescriptors)
 {
+
+
 	ComPtr<ID3D12DescriptorHeap> DescriptorHeap;
 
 	D3D12_DESCRIPTOR_HEAP_DESC Desc = {};
@@ -1090,6 +1133,9 @@ ComPtr<ID3D12DescriptorHeap> Ray_DX12HardwareRenderer::CreateDescriptorHeap(ComP
 	ThrowIfFailed(InDevice->CreateDescriptorHeap(&Desc, IID_PPV_ARGS(&DescriptorHeap)));
 
 	return DescriptorHeap;
+
+
+
 }
 
 
@@ -1134,7 +1180,7 @@ ComPtr<ID3D12GraphicsCommandList4> Ray_DX12HardwareRenderer::CreateCommandList(C
 	//Create a command list that supports ray tracing
 	ThrowIfFailed(InDevice->CreateCommandList(0, InType, InCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&CommandList)));
 
-	//Before to reset a command list, we must close it.
+	//Before to reset a command list, we must close it because it is created in recording state.
 	ThrowIfFailed(CommandList->Close());
 
 	return CommandList;

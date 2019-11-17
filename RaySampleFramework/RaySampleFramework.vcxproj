@@ -148,6 +148,7 @@
     <ClInclude Include="RayPCH.h" />
     <ClInclude Include="RaySample.h" />
     <ClInclude Include="RayWin32Application.h" />
+    <ClInclude Include="ShaderParameters.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="RayDX12HardwareRenderer.cpp" />

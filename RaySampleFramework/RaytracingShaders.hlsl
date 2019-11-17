@@ -116,7 +116,7 @@ void RayCastingClosestHit(inout RayPayload payload, in IntersectionAttributes at
 [shader("miss")]
 void RayCastingMiss(inout RayPayload payload)
 {
-    payload.color = float4(0.0f, 0.0f, 0.0f, 1);
+    payload.color = float4(1.0f, 0.0f, 0.0f, 1);
 }
 
 #endif // RAYTRACING_SHADERS_HLSL
