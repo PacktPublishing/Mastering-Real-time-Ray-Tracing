@@ -342,16 +342,19 @@ void Ray_DX12HardwareRenderer::CreateRootSignatures()
 	// Global Root Signature
     // This is a root signature that is shared across all raytracing shaders invoked during a DispatchRays() call.
 	{
-		CD3DX12_DESCRIPTOR_RANGE DescriptorRangeUAV;
+		CD3DX12_DESCRIPTOR_RANGE DescriptorRangeUAV;		
 
 		// We want to define a bounding convention for descriptor that fall in the range of UAV types.
 		DescriptorRangeUAV.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+	
 		
-		
-		CD3DX12_ROOT_PARAMETER RootParameters[GlobalRootSignatureParams::Count];
+		CD3DX12_ROOT_PARAMETER RootParameters[GlobalRootSignatureParams::Count] = {};
 		
 		// UAV used to store ray tracing results (color buffer that will be used by the ray tracer to store the color)
 		RootParameters[GlobalRootSignatureParams::OutputViewSlot].InitAsDescriptorTable(1, &DescriptorRangeUAV);
+
+		// Scene Constant buffer 
+		RootParameters[GlobalRootSignatureParams::SceneConstantBuffer].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_ALL);
 
 		// Parameter mapping for the Top Level Acceleration structure passed for ray tracing 
 		RootParameters[GlobalRootSignatureParams::AccelerationStructureSlot].InitAsShaderResourceView(0);
@@ -359,6 +362,8 @@ void Ray_DX12HardwareRenderer::CreateRootSignatures()
 		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC GlobalRootSignatureDesc(ARRAYSIZE(RootParameters), RootParameters);
 		
 		SerializeAndCreateRaytracingRootSignature(GlobalRootSignatureDesc, &mRaytracingGlobalRootSignature, featureData.HighestVersion);
+		NAME_D3D12_OBJECT(mRaytracingGlobalRootSignature);
+		
 	}
 
 	// Local Root Signature
@@ -376,29 +381,11 @@ void Ray_DX12HardwareRenderer::CreateRootSignatures()
 		LocalRootSignatureDesc.Desc_1_1.Flags = D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE;
 		
 		SerializeAndCreateRaytracingRootSignature(LocalRootSignatureDesc, &mRaytracingLocalRootSignature, featureData.HighestVersion);
+		NAME_D3D12_OBJECT(mRaytracingLocalRootSignature);
 	}
 
 }
 
-
-
-// Local root signature and shader association
-// This is a root signature that enables a shader to have unique arguments that come from shader tables.
-void Ray_DX12HardwareRenderer::CreateLocalRootSignatureSubobjects(CD3D12_STATE_OBJECT_DESC* RaytracingPipeline)
-{
-	// Hit group and miss shaders in this sample are not using a local root signature and thus one is not associated with them.
-
-	// Local root signature to be used in a ray gen shader.
-	{
-		auto LocalRootSignature = RaytracingPipeline->CreateSubobject<CD3D12_LOCAL_ROOT_SIGNATURE_SUBOBJECT>();
-		LocalRootSignature->SetRootSignature(mRaytracingLocalRootSignature.Get());
-		
-		// Shader association
-		auto RootSignatureAssociation = RaytracingPipeline->CreateSubobject<CD3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION_SUBOBJECT>();
-		RootSignatureAssociation->SetSubobjectToAssociate(*LocalRootSignature);
-		RootSignatureAssociation->AddExport(gRaygenShaderName);
-	}
-}
 
 
 // Ray tracing PSO creation (we eventually manage PSO with some kind of factory)
@@ -435,13 +422,22 @@ void Ray_DX12HardwareRenderer::CreateRaytracingPipelineStateObject()
 	// Shader config
     // Defines the maximum sizes in bytes for the ray payload and attribute structure.
 	auto ShaderConfig = RaytracingPipeline.CreateSubobject<CD3D12_RAYTRACING_SHADER_CONFIG_SUBOBJECT>();
-	UINT PayloadSize = 4 * sizeof(float);   // float4 color
-	UINT AttributeSize = 2 * sizeof(float); // float2 barycentrics
+	u32 PayloadSize = 4 * sizeof(float);   // float4 color
+	u32 AttributeSize = 2 * sizeof(float); // float2 barycentrics
 	ShaderConfig->Config(PayloadSize, AttributeSize);
 
 
 	// Local root signature and shader association
-	CreateLocalRootSignatureSubobjects(&RaytracingPipeline);
+	// Hit group and miss shaders in this sample are not using a local root signature and thus one is not associated with them.
+    {
+		auto LocalRootSignatureSubObj = RaytracingPipeline.CreateSubobject<CD3D12_LOCAL_ROOT_SIGNATURE_SUBOBJECT>();
+		LocalRootSignatureSubObj->SetRootSignature(mRaytracingLocalRootSignature.Get());
+
+		// Shader association
+		auto RootSignatureAssociationSubObj = RaytracingPipeline.CreateSubobject<CD3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION_SUBOBJECT>();
+		RootSignatureAssociationSubObj->SetSubobjectToAssociate(*LocalRootSignatureSubObj);
+		RootSignatureAssociationSubObj->AddExport(gRaygenShaderName);
+	}
 
 	// This is a root signature that enables a shader to have unique arguments that come from shader tables.
 
@@ -452,15 +448,14 @@ void Ray_DX12HardwareRenderer::CreateRaytracingPipelineStateObject()
 
 	// Pipeline config
 	// Defines the maximum TraceRay() recursion depth.
-	auto PipelineConfig = RaytracingPipeline.CreateSubobject<CD3D12_RAYTRACING_PIPELINE_CONFIG_SUBOBJECT>();
+	auto PipelineConfigSubObj = RaytracingPipeline.CreateSubobject<CD3D12_RAYTRACING_PIPELINE_CONFIG_SUBOBJECT>();
 	
 	// PERFOMANCE TIP: Set max recursion depth as low as needed 
 	// as drivers may apply optimization strategies for low recursion depths. 
 	u32 MaxRecursionDepth = 1; // ~ primary rays only. 
-	PipelineConfig->Config(MaxRecursionDepth);
+	PipelineConfigSubObj->Config(MaxRecursionDepth);
 
-
-	// Create a ray tracing state object for the DXR pipeline
+	// Create a ray tracing pipeline state object (PSO) for the DXR pipeline
 	ThrowIfFailed(mD3DDevice->CreateStateObject(RaytracingPipeline, IID_PPV_ARGS(&mDXRStateObject)), L"Couldn't create DirectX Raytracing state object.\n");
 }
 
@@ -472,14 +467,15 @@ void Ray_DX12HardwareRenderer::CreateDescriptorHeaps()
 	// Create descriptor heap for CBV/SRV and UAV
 
 	// Allocate a heap for 3 descriptors:
-	// 2 - bottom and top level acceleration structure fallback wrapped pointers
 	// 1 - raytracing output texture SRV
-	DescriptorHeapDesc.NumDescriptors = 3;
+	// 2 - bottom and top level acceleration structure fallback wrapped pointers
+	// 1 - Constant buffer (scene constants)
+	DescriptorHeapDesc.NumDescriptors = 4;
 	DescriptorHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	DescriptorHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	DescriptorHeapDesc.NodeMask = 0;
-	mD3DDevice->CreateDescriptorHeap(&DescriptorHeapDesc, IID_PPV_ARGS(&mDescriptorHeap));
-	NAME_D3D12_OBJECT(mDescriptorHeap);
+	mD3DDevice->CreateDescriptorHeap(&DescriptorHeapDesc, IID_PPV_ARGS(&mCBVSRVDescriptorHeap));
+	NAME_D3D12_OBJECT(mCBVSRVDescriptorHeap);
 
 	// Get the size of each descriptor on this hardware
 	mDescriptorSize = mD3DDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -541,26 +537,27 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 
 	// Get required sizes for an acceleration structure.
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS buildFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS topLevelInputs = {};
-	topLevelInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-	topLevelInputs.Flags = buildFlags;
-	topLevelInputs.NumDescs = 1;
-	topLevelInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS TopLevelInputs = {};
+	TopLevelInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+	TopLevelInputs.Flags = buildFlags;
+	TopLevelInputs.NumDescs = 1;
+	TopLevelInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
 
-	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO topLevelPrebuildInfo = {};
-	mD3DDevice->GetRaytracingAccelerationStructurePrebuildInfo(&topLevelInputs, &topLevelPrebuildInfo);
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO TopLevelPrebuildInfo = {};
+	mD3DDevice->GetRaytracingAccelerationStructurePrebuildInfo(&TopLevelInputs, &TopLevelPrebuildInfo);
 	
-	ThrowIfFalse(topLevelPrebuildInfo.ResultDataMaxSizeInBytes > 0);
+	ThrowIfFalse(TopLevelPrebuildInfo.ResultDataMaxSizeInBytes > 0);
 
-	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO bottomLevelPrebuildInfo = {};
-	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS BottomLevelInputs = topLevelInputs;
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO BottomLevelPrebuildInfo = {};
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS BottomLevelInputs = TopLevelInputs;
 	BottomLevelInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
 	BottomLevelInputs.pGeometryDescs = &geometryDesc;
-	mD3DDevice->GetRaytracingAccelerationStructurePrebuildInfo(&BottomLevelInputs, &bottomLevelPrebuildInfo);
-	ThrowIfFalse(bottomLevelPrebuildInfo.ResultDataMaxSizeInBytes > 0);
+	mD3DDevice->GetRaytracingAccelerationStructurePrebuildInfo(&BottomLevelInputs, &BottomLevelPrebuildInfo);
+	ThrowIfFalse(BottomLevelPrebuildInfo.ResultDataMaxSizeInBytes > 0);
 
-	ComPtr<ID3D12Resource> scratchResource;
-	AllocateUAVBuffer(Device, std::max(topLevelPrebuildInfo.ScratchDataSizeInBytes, bottomLevelPrebuildInfo.ScratchDataSizeInBytes), &scratchResource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ScratchResource");
+	ComPtr<ID3D12Resource> ScratchResource;
+
+	AllocateUAVBuffer(Device, std::max(TopLevelPrebuildInfo.ScratchDataSizeInBytes, BottomLevelPrebuildInfo.ScratchDataSizeInBytes), &ScratchResource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ScratchResource");
 
 	// Allocate resources for acceleration structures.
 	// Acceleration structures can only be placed in resources that are created in the default heap (or custom heap equivalent). 
@@ -573,8 +570,8 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 		D3D12_RESOURCE_STATES InitialResourceState;
 		InitialResourceState = D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
 		
-		AllocateUAVBuffer(Device, bottomLevelPrebuildInfo.ResultDataMaxSizeInBytes, &mBLAS, InitialResourceState, L"BottomLevelAccelerationStructure");
-		AllocateUAVBuffer(Device, topLevelPrebuildInfo.ResultDataMaxSizeInBytes, &mTLAS, InitialResourceState, L"TopLevelAccelerationStructure");
+		AllocateUAVBuffer(Device, BottomLevelPrebuildInfo.ResultDataMaxSizeInBytes, &mBLAS, InitialResourceState, L"BottomLevelAccelerationStructure");
+		AllocateUAVBuffer(Device, TopLevelPrebuildInfo.ResultDataMaxSizeInBytes, &mTLAS, InitialResourceState, L"TopLevelAccelerationStructure");
 	}
 
 
@@ -592,30 +589,30 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC BottomLevelBuildDesc = {};
 	{
 		BottomLevelBuildDesc.Inputs = BottomLevelInputs;
-		BottomLevelBuildDesc.ScratchAccelerationStructureData = scratchResource->GetGPUVirtualAddress();
+		BottomLevelBuildDesc.ScratchAccelerationStructureData = ScratchResource->GetGPUVirtualAddress();
 		BottomLevelBuildDesc.DestAccelerationStructureData = mBLAS->GetGPUVirtualAddress();
 	}
 
 	// Top Level Acceleration Structure desc
-	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC topLevelBuildDesc = {};
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC TopLevelBuildDesc = {};
 	{
-		topLevelInputs.InstanceDescs = InstanceDescs->GetGPUVirtualAddress();
-		topLevelBuildDesc.Inputs = topLevelInputs;
-		topLevelBuildDesc.DestAccelerationStructureData = mTLAS->GetGPUVirtualAddress();
-		topLevelBuildDesc.ScratchAccelerationStructureData = scratchResource->GetGPUVirtualAddress();
+		TopLevelInputs.InstanceDescs = InstanceDescs->GetGPUVirtualAddress();
+		TopLevelBuildDesc.Inputs = TopLevelInputs;
+		TopLevelBuildDesc.ScratchAccelerationStructureData = ScratchResource->GetGPUVirtualAddress();
+		TopLevelBuildDesc.DestAccelerationStructureData = mTLAS->GetGPUVirtualAddress();
 	}
 
 	auto BuildAccelerationStructure = [&](auto* RaytracingCommandList)
 	{
 		RaytracingCommandList->BuildRaytracingAccelerationStructure(&BottomLevelBuildDesc, 0, nullptr);
-		mD3DCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::UAV(mBLAS.Get()));
-		RaytracingCommandList->BuildRaytracingAccelerationStructure(&topLevelBuildDesc, 0, nullptr);
+		RaytracingCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::UAV(mBLAS.Get()));
+		RaytracingCommandList->BuildRaytracingAccelerationStructure(&TopLevelBuildDesc, 0, nullptr);
 	};
 
 	// Build acceleration structure.
 	BuildAccelerationStructure(mD3DCommandList.Get());
 	
-	// Kick off acceleration structure construction.
+	// Close the command list and Kick off acceleration structure construction by executing the recorded commands on the cmd queue on the GPU
 	ThrowIfFailed(mD3DCommandList->Close());
 	ID3D12CommandList *commandLists[] = { mD3DCommandList.Get() };
 	mD3DCommandQueue->ExecuteCommandLists(ARRAYSIZE(commandLists), commandLists);
@@ -690,8 +687,8 @@ void Ray_DX12HardwareRenderer::BuildShaderTables()
 // If the passed descriptorIndexToUse is valid, it will be used instead of allocating a new one.
 u32 Ray_DX12HardwareRenderer::AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE* CPUDescriptor, u32 DescriptorIndexToUse)
 {
-	auto DescriptorHeapCpuBase = mDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	if (DescriptorIndexToUse >= mDescriptorHeap->GetDesc().NumDescriptors)
+	auto DescriptorHeapCpuBase = mCBVSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	if (DescriptorIndexToUse >= mCBVSRVDescriptorHeap->GetDesc().NumDescriptors)
 	{
 		DescriptorIndexToUse = mAllocatedDescriptorsIndex++;
 	}
@@ -726,7 +723,7 @@ void Ray_DX12HardwareRenderer::CreateRaytracingOutputResource()
 	UAVDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
 	mD3DDevice->CreateUnorderedAccessView(mRayTracingOutputBuffer.Get(), nullptr, &UAVDesc, UAVDescriptorHandle);
 	
-	mRaytracingOutputResourceUAVGpuDescriptor = CD3DX12_GPU_DESCRIPTOR_HANDLE(mDescriptorHeap->GetGPUDescriptorHandleForHeapStart(), mRaytracingOutputResourceUAVDescriptorHeapIndex, mDescriptorSize);
+	mRaytracingOutputResourceUAVGpuDescriptor = CD3DX12_GPU_DESCRIPTOR_HANDLE(mCBVSRVDescriptorHeap->GetGPUDescriptorHandleForHeapStart(), mRaytracingOutputResourceUAVDescriptorHeapIndex, mDescriptorSize);
 }
 
 
@@ -757,7 +754,7 @@ void Ray_DX12HardwareRenderer::RecreateRaytracingOutputResource(u32 InWidth, u32
 	mD3DDevice->CreateUnorderedAccessView(mRayTracingOutputBuffer.Get(), nullptr, &UAVDesc, UAVDescriptorHandle);
 
 
-	mRaytracingOutputResourceUAVGpuDescriptor = CD3DX12_GPU_DESCRIPTOR_HANDLE(mDescriptorHeap->GetGPUDescriptorHandleForHeapStart(), mRaytracingOutputResourceUAVDescriptorHeapIndex, mDescriptorSize);
+	mRaytracingOutputResourceUAVGpuDescriptor = CD3DX12_GPU_DESCRIPTOR_HANDLE(mCBVSRVDescriptorHeap->GetGPUDescriptorHandleForHeapStart(), mRaytracingOutputResourceUAVDescriptorHeapIndex, mDescriptorSize);
 }
 
 
@@ -813,6 +810,42 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 
 	// Create a command list for this application (i.e. application is single threaded therefore a single command list is enough in this case)
 	mD3DCommandList = CreateCommandList(mD3DDevice, mD3DCommandAllocator[mBackBufferIndex], D3D12_COMMAND_LIST_TYPE_DIRECT);
+
+
+
+
+	// Dynamic constant buffer creation here
+
+    // Create the constant buffers.
+	const u32 CBufferSize = (sizeof(SceneConstants) + (D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1)) & ~(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1); // must be a multiple 256 bytes
+	ThrowIfFailed( mD3DDevice->CreateCommittedResource( &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+														D3D12_HEAP_FLAG_NONE,
+														&CD3DX12_RESOURCE_DESC::Buffer(CBufferSize),
+														D3D12_RESOURCE_STATE_GENERIC_READ,
+														nullptr,
+														IID_PPV_ARGS(&mSceneConstantsCB)) );
+	
+
+	// Map the constant buffers and cache their heap pointers.
+	CD3DX12_RANGE readRange(0, 0);        // We do not intend to read from this resource on the CPU.
+	ThrowIfFailed(mSceneConstantsCB->Map(0, &readRange, reinterpret_cast<void**>(&mSceneConstantsCB_DataPtr)));
+	
+
+	// Create the constant buffer views (for now just the one related to scene constants
+	D3D12_CONSTANT_BUFFER_VIEW_DESC CBVDesc = {};
+	CBVDesc.SizeInBytes = CBufferSize;
+
+	CBVDesc.BufferLocation = mSceneConstantsCB->GetGPUVirtualAddress();
+
+	// Now we need to know where to put the constant buffer, therefore we provide for the correct heap handle
+	// This handle is a CPU side handle that we use like a pointer (it is not a pointer obviously, but a safest way to reference a resource preventing from erroneous dereferencing)
+	auto DescriptorHeapCpuBase = mCBVSRVDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	auto CBufferCPUHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(DescriptorHeapCpuBase, 3, mDescriptorSize);
+
+	// We cache the GPU handle which will be the one we will use to set the constat buffer
+	mSceneConstantsHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(mCBVSRVDescriptorHeap->GetGPUDescriptorHandleForHeapStart(),3, mDescriptorSize);
+	mD3DDevice->CreateConstantBufferView(&CBVDesc, CBufferCPUHandle);
+
 
 
 	// Create fences for GPU flush!
@@ -882,6 +915,9 @@ void Ray_DX12HardwareRenderer::Resize(u32 InWidth, u32 InHeight)
 		
 		mViewport.Width = static_cast<float>(Width);
 		mViewport.Height = static_cast<float>(Height);
+
+		mWidth = Width;
+		mHeight = Height;
 
 		// Flush the GPU queue to make sure the swap chain's back buffers
 		// are not being referenced by an in-flight command list.
@@ -1192,6 +1228,15 @@ ComPtr<ID3D12GraphicsCommandList4> Ray_DX12HardwareRenderer::CreateCommandList(C
 void Ray_DX12HardwareRenderer::BeginFrame(float* InClearColor)
 {
 
+	// TODO: remove cbuffer update from here (must go in update section of the sample at most) ///
+	SceneConstants SceneCB = { };
+
+	SceneCB.CameraPosition = { 0.0f,0.0f,-5.5f, 0.0f };
+
+	memcpy(mSceneConstantsCB_DataPtr, &SceneCB, sizeof(SceneConstants));
+	//////////////////////////////////////////////////////////////////////////////////////////////
+
+
 	//Beginning of the frame
 	float DefaultClearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
 	auto commandAllocator = mD3DCommandAllocator[mBackBufferIndex];
@@ -1267,11 +1312,21 @@ void Ray_DX12HardwareRenderer::Render()
 	CommandList->SetComputeRootSignature(mRaytracingGlobalRootSignature.Get());
 
 	D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
-	CommandList->SetDescriptorHeaps(1, mDescriptorHeap.GetAddressOf());
-	CommandList->SetComputeRootDescriptorTable(GlobalRootSignatureParams::OutputViewSlot, mRaytracingOutputResourceUAVGpuDescriptor);
-	CommandList->SetComputeRootShaderResourceView(GlobalRootSignatureParams::AccelerationStructureSlot, mTLAS->GetGPUVirtualAddress());
-	DispatchRays(CommandList, mDXRStateObject.Get(), &dispatchDesc);
 
+	// Set the descriptor heap(s)
+	CommandList->SetDescriptorHeaps(1, mCBVSRVDescriptorHeap.GetAddressOf());
+	
+	// UAV output buffer is set as a descriptor table
+	CommandList->SetComputeRootDescriptorTable(GlobalRootSignatureParams::OutputViewSlot, mRaytracingOutputResourceUAVGpuDescriptor);
+
+	// Top level acceleration structure is set as a Shader Resource View
+	CommandList->SetComputeRootShaderResourceView(GlobalRootSignatureParams::AccelerationStructureSlot, mTLAS->GetGPUVirtualAddress());
+
+	// Scene constant buffer
+	CommandList->SetComputeRootConstantBufferView(GlobalRootSignatureParams::SceneConstantBuffer, mSceneConstantsCB->GetGPUVirtualAddress());
+	
+	// Then we are ready to dispatch rays
+	DispatchRays(CommandList, mDXRStateObject.Get(), &dispatchDesc);
 
 	// Done! Copy the result on backbuffer ready to be displayed
 	CopyRayTracingOutputToBackBuffer();

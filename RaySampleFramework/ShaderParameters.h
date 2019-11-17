@@ -1,5 +1,6 @@
 #pragma once
 
+//#include "RayPCH.h"
 
 // Definition of viewport
 struct Viewport
@@ -17,14 +18,23 @@ struct RayGenCB
 	Viewport mStencil;
 };
 
+
+
+struct SceneConstants
+{
+	DirectX::XMFLOAT4 CameraPosition;
+};
+
+
 // Handy way to the define global root parameters slot mapping
 namespace GlobalRootSignatureParams
 {
 	enum Value
 	{
-		OutputViewSlot = 0,           //UAV slot
-		AccelerationStructureSlot,    //Acceleration structure slot
-		Count                         //Total number of global signature in use 
+		OutputViewSlot = 0,           // UAV slot
+		AccelerationStructureSlot,    // Acceleration structure slot
+		SceneConstantBuffer,          // Scene Constant buffer
+		Count                         // Total number of global signature in use 
 	};
 }
 

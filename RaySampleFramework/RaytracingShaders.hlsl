@@ -3,21 +3,6 @@
 
 //#include "RaytracingHlslCompat.h"
 
-struct Viewport
-{
-	float left;
-	float top;
-	float right;
-	float bottom;
-};
-
-struct RayGenCB
-{
-	Viewport viewport;
-	Viewport stencil;
-};
-
-
 // Hold the acceleration data structure (built from the application)
 RaytracingAccelerationStructure Scene : register(t0, space0);
 
@@ -28,7 +13,12 @@ typedef BuiltInTriangleIntersectionAttributes IntersectionAttributes;
 RWTexture2D<float4> RenderTarget : register(u0);
 
 // CBuffer passed from the application
-ConstantBuffer<RayGenCB> gRayGenCB : register(b0);
+cbuffer SceneConstants : register(b1)
+{
+	float3 CameraPosition;
+	int pad;
+};
+
 
 struct RayPayload
 {
@@ -65,7 +55,7 @@ void RayCastingShader()
 	const float ScaleY = tan(HFov);
 	const float ScaleX = ScaleY * AspectRatio;
 	// Camera is positioned one unit away from the origin along Z
-	const float3 CameraEye = float3(0.0f,0.0f,-2.5f);
+	const float3 CameraEye = CameraPosition; // float3(0.0f, 0.0f, -2.5f);
 
 	// We assume a fixed camera looking down positive Z 
 	// The up axis in our case is Y

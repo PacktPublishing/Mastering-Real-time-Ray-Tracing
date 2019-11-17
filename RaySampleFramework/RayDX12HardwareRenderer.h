@@ -147,7 +147,6 @@ private:
 
 
 	void SerializeAndCreateRaytracingRootSignature(D3D12_VERSIONED_ROOT_SIGNATURE_DESC& Desc, ComPtr<ID3D12RootSignature>* RootSig, D3D_ROOT_SIGNATURE_VERSION RootSignatureVersion);
-	void CreateLocalRootSignatureSubobjects(CD3D12_STATE_OBJECT_DESC* RaytracingPipeline);
 
 	u32 AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE* CPUDescriptor, u32 DescriptorIndexToUse);
 
@@ -182,7 +181,7 @@ private:
 	/** D3D12 command list */	
 	ComPtr<ID3D12GraphicsCommandList4> mD3DCommandList; //cmd list for ray tracing
 
-	/** DirectX Ray tracing state object */
+	/** DirectX Ray tracing pipeline state object (PSO) */
 	ComPtr<ID3D12StateObject> mDXRStateObject;
 
 	/** D3D12 Command allocator */
@@ -254,7 +253,7 @@ private:
 	// Ray tracing specific structures and resources //////////////////////////////
 
 	/** Used for TLAS, BLAS and Ray tracing output buffer*/
-	ComPtr<ID3D12DescriptorHeap> mDescriptorHeap;
+	ComPtr<ID3D12DescriptorHeap> mCBVSRVDescriptorHeap;
 	u32 mDescriptorsNum;
 	u32 mDescriptorSize;
 
@@ -295,5 +294,16 @@ private:
 
 
 	//////////////////////////////////////////////////////////////////////////////
+
+    // Cbuffers
+
+	/** Constant buffer resource  */
+	ComPtr<ID3D12Resource> mSceneConstantsCB;
+
+	/** Actual mapped heap for the constant buffer */
+	SceneConstants* mSceneConstantsCB_DataPtr = nullptr;
+
+	/** GPU side resource handle to the heap */
+	CD3DX12_GPU_DESCRIPTOR_HANDLE mSceneConstantsHandle;
 
 };
