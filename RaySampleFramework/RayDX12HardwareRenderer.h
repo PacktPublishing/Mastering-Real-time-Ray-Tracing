@@ -8,6 +8,43 @@
 #include <chrono>
 
 
+struct RenderPacket
+{
+	RenderPacket() = default;
+
+	// convenient name alias for verbose microsoft WRL ComPtr object
+	template<typename T>
+	using ComPtr = Microsoft::WRL::ComPtr<T>;
+
+	/** Vertex Buffer */
+	ComPtr<ID3D12Resource> mVB;
+
+	/** Index Buffer */
+	ComPtr<ID3D12Resource> mIB;
+
+	/** Vertex Count */
+	u32 mVertexCount;
+
+	/** Index Count */
+	u32 mIndexCount;
+
+};
+
+struct RayTracingRenderPacket
+{
+	RayTracingRenderPacket() = default;
+
+	// convenient name alias for verbose microsoft WRL ComPtr object
+	template<typename T>
+	using ComPtr = Microsoft::WRL::ComPtr<T>;
+
+	/** Bottom level acceleration structure */
+	ComPtr<ID3D12Resource> mBLAS;
+
+	/** Top level acceleration structure */
+	ComPtr<ID3D12Resource> mTLAS;
+};
+
 
 class Ray_DX12HardwareRenderer : public Ray_IHardwareRenderer
 {
@@ -42,9 +79,13 @@ public:
 private:
 
 
-	/** Wait for the previous frame to finish */
+	/** Wait for the previous frame to finish (this method will stall the CPU until the GPU finishes). 
+	/** NOTE: This is NOT the proper way of synchronizing the CPU with the GPU */
 	void WaitForPreviousFrame();
 
+	/** Move to the next frame without blocking while the previous frame is in flight (only checks the previous frame has actually finished and eventually blocks. But in many cases the previous frame is done.) */
+	/** This is the proper way of synchronizing the CPU with the GPU without stalling the CPU all the times */
+	void MoveToNextFrame();
 
     // It is sometimes useful to wait until all previously executed commands have finished executing before doing something
     // (for example, resizing the swap chain buffers requires any references to the buffers to be released).
@@ -54,7 +95,7 @@ private:
 	void FlushGPU();
 
 
-	//convenient name alias for verbose microsoft WRL ComPtr object
+	// convenient name alias for verbose microsoft WRL ComPtr object
 	template<typename T>
 	using ComPtr = Microsoft::WRL::ComPtr<T>;
 
@@ -185,7 +226,7 @@ private:
 	ComPtr<ID3D12StateObject> mDXRStateObject;
 
 	/** D3D12 Command allocator */
-	ComPtr<ID3D12CommandAllocator> mD3DCommandAllocator[kMAX_BACK_BUFFER_COUNT];
+	ComPtr<ID3D12CommandAllocator> mD3DCommandAllocators[kMAX_BACK_BUFFER_COUNT];
 
 
 
@@ -205,9 +246,6 @@ private:
 	// Synchronization objects
 
 	/** Fence objects used to manage presentation */
-
-	/** Array of fences. One for each backbuffer that has potential work in flight */
-	ComPtr<ID3D12Fence> mFences[kMAX_BACK_BUFFER_COUNT];
 	
 	/** Single fence used just to signal a given cmd list */
 	ComPtr<ID3D12Fence> mFence;
@@ -220,7 +258,6 @@ private:
 
 	/** Fence event */
 	HANDLE mFenceEvent = nullptr;
-
 
 
 	/** Heap descriptor used to allocate memory for swap-chain render targets */
@@ -263,16 +300,24 @@ private:
 	ComPtr<ID3D12RootSignature> mRaytracingLocalRootSignature;
 
 	// geometry data (vertex and index buffer)
-	ComPtr<ID3D12Resource> mVB;
-	ComPtr<ID3D12Resource> mIB;
+	//ComPtr<ID3D12Resource> mVB;
+	//ComPtr<ID3D12Resource> mIB;
 
 	// Acceleration structure
 
 	/** Bottom level acceleration structure */
-	ComPtr<ID3D12Resource> mBLAS;
+	//ComPtr<ID3D12Resource> mBLAS;
 
 	/** Top level acceleration structure */
-	ComPtr<ID3D12Resource> mTLAS;
+	//ComPtr<ID3D12Resource> mTLAS;
+
+	/** List of objects to be rendered (used by the rasterizer) */
+	std::vector< RenderPacket > mRenderList;
+
+
+	/** Ray tracing acceleration structure for a given scene (used by the ray tracing hardware) */
+	RayTracingRenderPacket mRayTracingRenderPacket;
+
 
 	/** Resource used to store ray tracing output */
 	ComPtr<ID3D12Resource> mRayTracingOutputBuffer;

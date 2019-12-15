@@ -277,21 +277,39 @@ void Ray_DX12HardwareRenderer::WaitForPreviousFrame()
 }
 
 
+void Ray_DX12HardwareRenderer::MoveToNextFrame()
+{
+	// Schedule a Signal command in the queue.
+	const u64 CurrentFenceValue = mFrameFenceValues[mBackBufferIndex];
+	ThrowIfFailed(mD3DCommandQueue->Signal(mFence.Get(), CurrentFenceValue));
+
+	// Update the frame index.
+	mBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
+
+	// If the next frame is not ready to be rendered yet, wait until it is ready.
+	if (mFence->GetCompletedValue() < mFrameFenceValues[mBackBufferIndex])
+	{
+		ThrowIfFailed(mFence->SetEventOnCompletion(mFrameFenceValues[mBackBufferIndex], mFenceEvent));
+		WaitForSingleObjectEx(mFenceEvent, INFINITE, FALSE);
+	}
+
+	// Set the fence value for the next frame.
+	mFrameFenceValues[mBackBufferIndex] = CurrentFenceValue + 1;
+
+}
 
 
 void Ray_DX12HardwareRenderer::FlushGPU()
 {
-	for (size_t i = 0; i < kMAX_BACK_BUFFER_COUNT; i++)
-	{
-		u64 FenceValueForSignal = ++mFrameFenceValues[i];
-		mD3DCommandQueue->Signal(mFences[i].Get(), FenceValueForSignal);
-		if (mFences[i]->GetCompletedValue() < mFrameFenceValues[i])
-		{
-			mFences[i]->SetEventOnCompletion(FenceValueForSignal, mFenceEvent);
-			WaitForSingleObject(mFenceEvent, INFINITE);
-		}
-	}
-	mBackBufferIndex = 0;
+	// Schedule a Signal command in the queue.
+	ThrowIfFailed(mD3DCommandQueue->Signal(mFence.Get(), mFrameFenceValues[mBackBufferIndex]));
+
+	// Wait until the fence has been processed.
+	ThrowIfFailed(mFence->SetEventOnCompletion(mFrameFenceValues[mBackBufferIndex], mFenceEvent));
+	WaitForSingleObjectEx(mFenceEvent, INFINITE, FALSE);
+
+	// Increment the fence value for the current frame.
+	mFrameFenceValues[mBackBufferIndex]++;
 }
 
 
@@ -470,7 +488,7 @@ void Ray_DX12HardwareRenderer::CreateDescriptorHeaps()
 	// Create descriptor heap for CBV/SRV and UAV
 
 	// Allocate a heap for 3 descriptors:
-	// 1 - raytracing output texture SRV
+	// 1 - raytracing output texture UAV
 	// 2 - bottom and top level acceleration structure fallback wrapped pointers
 	// 1 - Constant buffer (scene constants)
 	DescriptorHeapDesc.NumDescriptors = 2;
@@ -502,41 +520,96 @@ void Ray_DX12HardwareRenderer::BuildGeometry()
 	auto Device = mD3DDevice.Get();
 
 	// Loads vertices and indices from FBX file
-	std::vector<MyVertex> VBuffer;
-	std::vector<u16> IBuffer;
-	FBXModelLoader::Get().Load((gAssetRootDir + "Sphere.fbx").c_str(), VBuffer, IBuffer);
+	SModel model;
+	FBXModelLoader::Get().Load((gAssetRootDir + "Plane.fbx").c_str(), model);
 
 	// This helper functions creates a buffer resource of type committed and upload vertex and index data in each one of them
-	AllocateUploadBuffer(Device, &VBuffer[0], sizeof(MyVertex)*VBuffer.size(), &mVB);
+	ComPtr<ID3D12Resource> VB;
+	ComPtr<ID3D12Resource> IB;
+	for (auto& Mesh : model.mMeshes)
+	{
+		// Allocate upload buffer for vertices 
+		AllocateUploadBuffer(Device
+			, &Mesh.mVertexBuffer[0]
+			, sizeof(MyVertex)*Mesh.mVertexBuffer.size()
+			, &VB);
 
-	AllocateUploadBuffer(Device, &IBuffer[0], IBuffer.size()*sizeof(u16), &mIB);
+		for (auto& MeshSection : Mesh.mMeshSections)
+		{			
+			if (MeshSection.mIndexBuffer)
+			{
+
+				// Allocate upload buffer for indices
+				AllocateUploadBuffer(Device
+					, MeshSection.mIndexBuffer
+					, MeshSection.mIndexCount * (Mesh.mUse32BitIndices ? sizeof(u32) : sizeof(u16))
+					, &IB);
+
+
+				// NOTE: Renderer "connection" happens here. We actually create the GPU resource needed to render geometry ///////
+
+				// Build Render Packet with vertex/index buffer geometry 
+				RenderPacket RPacket;
+				RPacket.mVB = VB;
+				RPacket.mIB = IB;
+				RPacket.mVertexCount = (u32)Mesh.mVertexBuffer.size();
+				RPacket.mIndexCount = MeshSection.mIndexCount;
+				mRenderList.push_back(RPacket);
+
+				//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+			}
+		}
+	}
 }
 
 // Build acceleration structures 
 void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 {
 	// Get current command allocator given the index of the current frame backbuffer
-	auto CommnadAllocator = mD3DCommandAllocator[mBackBufferIndex].Get();
+	auto CommnadAllocator = mD3DCommandAllocators[mBackBufferIndex].Get();
 	auto Device = mD3DDevice.Get();
 
 	// Reset the command list for the acceleration structure construction.
 	mD3DCommandList->Reset(CommnadAllocator, nullptr);
 
-	D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
-	geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-	geometryDesc.Triangles.IndexBuffer = mIB->GetGPUVirtualAddress();
-	geometryDesc.Triangles.IndexCount = static_cast<UINT>(mIB->GetDesc().Width) / sizeof(u16);
-	geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R16_UINT;
-	geometryDesc.Triangles.Transform3x4 = 0;
-	geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-	geometryDesc.Triangles.VertexCount = static_cast<UINT>(mVB->GetDesc().Width) / (sizeof(float)*3);
-	geometryDesc.Triangles.VertexBuffer.StartAddress = mVB->GetGPUVirtualAddress();
-	geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(MyVertex);
+	// Resource naming useful for debugging	
+	std::wstring BLASName(L"BottomLevelAccelerationStructure_");
+	std::wstring TLASName(L"TopLevelAccelerationStructure_");
+	std::wstring InstanceDescName(L"InstanceDesc_");
+	std::wstring ScratchResourceName(L"ScratchResource_");
 
-	// Mark the geometry as opaque. 
-	// PERFORMANCE TIP: mark geometry as opaque whenever applicable as it can enable important ray processing optimizations.
-	// Note: When rays encounter opaque geometry an any hit shader will not be executed whether it is present or not.
-	geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+	// Descs/Resources that need to be alive until they are potentially in use by the command list 
+	ComPtr<ID3D12Resource> InstanceDescs;
+	ComPtr<ID3D12Resource> ScratchResources;
+
+	std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> GeometryDescs;
+	for (auto& RPacket : mRenderList)
+	{
+		// Convert packet id to wstring
+		//std::wstring StrPacketID(std::to_wstring(PacketID));
+
+		bool Use32BitIndices = (RPacket.mVertexCount > 65536);
+
+		D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
+		geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+		geometryDesc.Triangles.IndexBuffer = RPacket.mIB->GetGPUVirtualAddress();
+		geometryDesc.Triangles.IndexCount = RPacket.mIndexCount; // static_cast<UINT>(RPacket.mIB->GetDesc().Width) / sizeof(u16);
+		geometryDesc.Triangles.IndexFormat = Use32BitIndices ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT;
+		geometryDesc.Triangles.Transform3x4 = 0;
+		geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+		geometryDesc.Triangles.VertexCount = RPacket.mVertexCount; //static_cast<UINT>(RPacket.mVB->GetDesc().Width) / sizeof(MyVertex);
+		geometryDesc.Triangles.VertexBuffer.StartAddress = RPacket.mVB->GetGPUVirtualAddress();
+		geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(MyVertex);
+
+		// Mark the geometry as opaque. 
+		// PERFORMANCE TIP: mark geometry as opaque whenever applicable as it can enable important ray processing optimizations.
+		// Note: When rays encounter opaque geometry an any hit shader will not be executed whether it is present or not.
+		geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+
+		// Store the geometry desc for this mesh
+		GeometryDescs.push_back(geometryDesc);
+
+	}
 
 	// Get required sizes for an acceleration structure.
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS buildFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
@@ -548,19 +621,18 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO TopLevelPrebuildInfo = {};
 	mD3DDevice->GetRaytracingAccelerationStructurePrebuildInfo(&TopLevelInputs, &TopLevelPrebuildInfo);
-	
+
 	ThrowIfFalse(TopLevelPrebuildInfo.ResultDataMaxSizeInBytes > 0);
 
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO BottomLevelPrebuildInfo = {};
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS BottomLevelInputs = TopLevelInputs;
 	BottomLevelInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-	BottomLevelInputs.pGeometryDescs = &geometryDesc;
+	BottomLevelInputs.pGeometryDescs = GeometryDescs.data();
+	BottomLevelInputs.NumDescs = static_cast<u32>(GeometryDescs.size());
 	mD3DDevice->GetRaytracingAccelerationStructurePrebuildInfo(&BottomLevelInputs, &BottomLevelPrebuildInfo);
-	ThrowIfFalse(BottomLevelPrebuildInfo.ResultDataMaxSizeInBytes > 0);
+	ThrowIfFalse(BottomLevelPrebuildInfo.ResultDataMaxSizeInBytes > 0);		
 
-	ComPtr<ID3D12Resource> ScratchResource;
-
-	AllocateUAVBuffer(Device, std::max(TopLevelPrebuildInfo.ScratchDataSizeInBytes, BottomLevelPrebuildInfo.ScratchDataSizeInBytes), &ScratchResource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ScratchResource");
+	AllocateUAVBuffer(Device, std::max(TopLevelPrebuildInfo.ScratchDataSizeInBytes, BottomLevelPrebuildInfo.ScratchDataSizeInBytes), &ScratchResources, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, ScratchResourceName.c_str());
 
 	// Allocate resources for acceleration structures.
 	// Acceleration structures can only be placed in resources that are created in the default heap (or custom heap equivalent). 
@@ -570,30 +642,40 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 	//  - the system will be doing this type of access in its implementation of acceleration structure builds behind the scenes.
 	//  - from the app point of view, synchronization of writes/reads to acceleration structures is accomplished using UAV barriers.
 	{
-		D3D12_RESOURCE_STATES InitialResourceState;
-		InitialResourceState = D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
-		
-		AllocateUAVBuffer(Device, BottomLevelPrebuildInfo.ResultDataMaxSizeInBytes, &mBLAS, InitialResourceState, L"BottomLevelAccelerationStructure");
-		AllocateUAVBuffer(Device, TopLevelPrebuildInfo.ResultDataMaxSizeInBytes, &mTLAS, InitialResourceState, L"TopLevelAccelerationStructure");
+		D3D12_RESOURCE_STATES InitialResourceState = D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;		
+		AllocateUAVBuffer(Device, BottomLevelPrebuildInfo.ResultDataMaxSizeInBytes, &mRayTracingRenderPacket.mBLAS, InitialResourceState, BLASName.c_str());
 	}
 
-
-    // Ray tracing instance desc needs BLAS virtual GPU address
-	ComPtr<ID3D12Resource> InstanceDescs;
-	{
-		D3D12_RAYTRACING_INSTANCE_DESC InstanceDesc = {};
-		InstanceDesc.Transform[0][0] = InstanceDesc.Transform[1][1] = InstanceDesc.Transform[2][2] = 1;
-		InstanceDesc.InstanceMask = 1;
-		InstanceDesc.AccelerationStructure = mBLAS->GetGPUVirtualAddress();
-		AllocateUploadBuffer(Device, &InstanceDesc, sizeof(InstanceDesc), &InstanceDescs, L"InstanceDescs");
-	}
 
 	// Bottom Level Acceleration Structure desc
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC BottomLevelBuildDesc = {};
 	{
 		BottomLevelBuildDesc.Inputs = BottomLevelInputs;
-		BottomLevelBuildDesc.ScratchAccelerationStructureData = ScratchResource->GetGPUVirtualAddress();
-		BottomLevelBuildDesc.DestAccelerationStructureData = mBLAS->GetGPUVirtualAddress();
+		BottomLevelBuildDesc.ScratchAccelerationStructureData = ScratchResources->GetGPUVirtualAddress();
+		BottomLevelBuildDesc.DestAccelerationStructureData = mRayTracingRenderPacket.mBLAS->GetGPUVirtualAddress();
+	}
+
+
+	// TOP LEVEL ACCELERATION STRUCTURE CREATION CODE ////////////////////////////////////////////////////////////////////////////////////////////////
+
+	// Top level acceleration structure creation code starts from here on 
+
+
+	{
+		D3D12_RESOURCE_STATES InitialResourceState = D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
+		AllocateUAVBuffer(Device, TopLevelPrebuildInfo.ResultDataMaxSizeInBytes, &mRayTracingRenderPacket.mTLAS, InitialResourceState, TLASName.c_str());
+	}
+
+	// Ray tracing instance desc needs BLAS virtual GPU address		
+
+	// NOTE: we should have as many instances as are the BLAS we've created
+	{
+		D3D12_RAYTRACING_INSTANCE_DESC InstanceDesc = {};
+		InstanceDesc.Transform[0][0] = InstanceDesc.Transform[1][1] = InstanceDesc.Transform[2][2] = 1.0f;
+		InstanceDesc.InstanceMask = 1;
+		//InstanceDesc.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+		InstanceDesc.AccelerationStructure = mRayTracingRenderPacket.mBLAS->GetGPUVirtualAddress();
+		AllocateUploadBuffer(Device, &InstanceDesc, sizeof(InstanceDesc), &InstanceDescs, InstanceDescName.c_str());
 	}
 
 	// Top Level Acceleration Structure desc
@@ -601,28 +683,49 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 	{
 		TopLevelInputs.InstanceDescs = InstanceDescs->GetGPUVirtualAddress();
 		TopLevelBuildDesc.Inputs = TopLevelInputs;
-		TopLevelBuildDesc.ScratchAccelerationStructureData = ScratchResource->GetGPUVirtualAddress();
-		TopLevelBuildDesc.DestAccelerationStructureData = mTLAS->GetGPUVirtualAddress();
+		TopLevelBuildDesc.ScratchAccelerationStructureData = ScratchResources->GetGPUVirtualAddress();
+		TopLevelBuildDesc.DestAccelerationStructureData = mRayTracingRenderPacket.mTLAS->GetGPUVirtualAddress();
 	}
+
 
 	auto BuildAccelerationStructure = [&](auto* RaytracingCommandList)
 	{
 		RaytracingCommandList->BuildRaytracingAccelerationStructure(&BottomLevelBuildDesc, 0, nullptr);
-		RaytracingCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::UAV(mBLAS.Get()));
+		RaytracingCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::UAV(mRayTracingRenderPacket.mBLAS.Get()));
 		RaytracingCommandList->BuildRaytracingAccelerationStructure(&TopLevelBuildDesc, 0, nullptr);
+		RaytracingCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::UAV(mRayTracingRenderPacket.mTLAS.Get()));	
 	};
 
 	// Build acceleration structure.
 	BuildAccelerationStructure(mD3DCommandList.Get());
-	
-	// Close the command list and Kick off acceleration structure construction by executing the recorded commands on the cmd queue on the GPU
+
+
+	// Close the command list and Kick off acceleration structure construction for each object, by executing the recorded commands on the cmd queue on the GPU
 	ThrowIfFailed(mD3DCommandList->Close());
 	ID3D12CommandList *commandLists[] = { mD3DCommandList.Get() };
 	mD3DCommandQueue->ExecuteCommandLists(ARRAYSIZE(commandLists), commandLists);
 
-	// Wait for GPU to finish as the locally created temporary GPU resources will get released once we go out of scope.
-	FlushGPU();
+	// Create temporary fence and let's wait for the work in flight on the GPU cmd queue to complete
 
+	// Actually create the fence with an initial value equal to 0
+	ComPtr<ID3D12Fence> Fence;
+	ThrowIfFailed(mD3DDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&Fence)));
+	
+	// Fance value to be reached
+	u64 LocalFenceValue = 1;
+
+	// Signal the queue with the value to be reached
+	mD3DCommandQueue->Signal(Fence.Get(), LocalFenceValue);
+
+	// Check if the completed fence value has been reached
+	if (Fence->GetCompletedValue() < LocalFenceValue)
+	{
+		// OS Event handler to be signaled once the GPU cmd queue reaches the fence
+		Fence->SetEventOnCompletion(LocalFenceValue, mFenceEvent);
+
+		// Block on the event until we reach LocalFenceValue
+		WaitForSingleObject(mFenceEvent, INFINITE);
+	}
 }
 
 // Build shader tables, which define shaders and their local root arguments.
@@ -808,11 +911,11 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 	// We need to create as many command allocator as are the buffer that we want the GPU to submit work for
 	for (int i = 0; i < kMAX_BACK_BUFFER_COUNT; ++i)
 	{
-		mD3DCommandAllocator[i] = CreateCommandAllocator(mD3DDevice, D3D12_COMMAND_LIST_TYPE_DIRECT);
+		mD3DCommandAllocators[i] = CreateCommandAllocator(mD3DDevice, D3D12_COMMAND_LIST_TYPE_DIRECT);
 	}
 
 	// Create a command list for this application (i.e. application is single threaded therefore a single command list is enough in this case)
-	mD3DCommandList = CreateCommandList(mD3DDevice, mD3DCommandAllocator[mBackBufferIndex], D3D12_COMMAND_LIST_TYPE_DIRECT);
+	mD3DCommandList = CreateCommandList(mD3DDevice, mD3DCommandAllocators[mBackBufferIndex], D3D12_COMMAND_LIST_TYPE_DIRECT);
 
 
 
@@ -850,19 +953,11 @@ void Ray_DX12HardwareRenderer::Init(u32 InWidth, u32 InHeight,HWND InHwnd,bool I
 	mSceneConstantsHandle.Offset(mDescriptorSize);
 
 
-	// Create fences for GPU flush!
-	// If we queue N frames on the GPU, we want to be sure that any work that is in flight on any of the N buffers will be completely done.
-	// So basically we need to track a fence for each in flight work in each one of the N buffer.
-	for (u32 i=0;i<kMAX_BACK_BUFFER_COUNT;++i)
-	{
-		mFences[i] = CreateFence(mD3DDevice);;
-	}
-
-
 	// One fence is enough to track that the previous in flight work for the previous frame is done.
 	// Create the dx12 fence
 	mFence = CreateFence(mD3DDevice);
-	
+	++mFrameFenceValues[mBackBufferIndex];
+
 	//Create the CPU event that we'll use to stall the CPU on the fence value (the fence value will get signaled from the GPU as soon as the GPU will reach the fence)	
 	mFenceEvent = CreateEventHandle();
 	
@@ -899,12 +994,6 @@ void Ray_DX12HardwareRenderer::Destroy()
 
 	//Close the CPU event 
 	CloseHandle(mFenceEvent);
-
-	//Reset index and vertex buffer resources
-	mIB.Reset();
-
-	mVB.Reset();
-
 }
 
 void Ray_DX12HardwareRenderer::Resize(u32 InWidth, u32 InHeight)
@@ -952,45 +1041,47 @@ void Ray_DX12HardwareRenderer::Resize(u32 InWidth, u32 InHeight)
 
 ComPtr<IDXGIAdapter4> Ray_DX12HardwareRenderer::GetAdapter(bool InUseWarp)
 {
-	ComPtr<IDXGIFactory4> dxgiFactory;
-	u32 createFactoryFlags = 0;
+	ComPtr<IDXGIFactory4> DXGIFactory;
+
+	u32 CreateFactoryFlags = 0;
+
 #if defined(_DEBUG)
-	createFactoryFlags = DXGI_CREATE_FACTORY_DEBUG;
+	CreateFactoryFlags = DXGI_CREATE_FACTORY_DEBUG;
 #endif
 
-	ThrowIfFailed(CreateDXGIFactory2(createFactoryFlags, IID_PPV_ARGS(&dxgiFactory)));
+	ThrowIfFailed(CreateDXGIFactory2(CreateFactoryFlags, IID_PPV_ARGS(&DXGIFactory)));
 
-	ComPtr<IDXGIAdapter1> dxgiAdapter1;
-	ComPtr<IDXGIAdapter4> dxgiAdapter4;
+	ComPtr<IDXGIAdapter1> DXGIAdapter1;
+	ComPtr<IDXGIAdapter4> DXGIAdapter4;
 
 	if (InUseWarp)
 	{
-		ThrowIfFailed(dxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&dxgiAdapter1)));
-		ThrowIfFailed(dxgiAdapter1.As(&dxgiAdapter4));
+		ThrowIfFailed(DXGIFactory->EnumWarpAdapter(IID_PPV_ARGS(&DXGIAdapter1)));
+		ThrowIfFailed(DXGIAdapter1.As(&DXGIAdapter4));
 	}
 	else
 	{
-		SIZE_T maxDedicatedVideoMemory = 0;
-		for (UINT i = 0; dxgiFactory->EnumAdapters1(i, &dxgiAdapter1) != DXGI_ERROR_NOT_FOUND; ++i)
+		SIZE_T MaxDedicatedVideoMemory = 0;
+		for (UINT i = 0; DXGIFactory->EnumAdapters1(i, &DXGIAdapter1) != DXGI_ERROR_NOT_FOUND; ++i)
 		{
 			DXGI_ADAPTER_DESC1 dxgiAdapterDesc1;
-			dxgiAdapter1->GetDesc1(&dxgiAdapterDesc1);
+			DXGIAdapter1->GetDesc1(&dxgiAdapterDesc1);
 
 			// Check to see if the adapter can create a D3D12 device without actually 
 			// creating it. The adapter with the largest dedicated video memory
 			// is favored.
 			if ((dxgiAdapterDesc1.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0 &&
-				SUCCEEDED(D3D12CreateDevice(dxgiAdapter1.Get(),
+				SUCCEEDED(D3D12CreateDevice(DXGIAdapter1.Get(),
 					D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr)) &&
-				dxgiAdapterDesc1.DedicatedVideoMemory > maxDedicatedVideoMemory)
+				dxgiAdapterDesc1.DedicatedVideoMemory > MaxDedicatedVideoMemory)
 			{
-				maxDedicatedVideoMemory = dxgiAdapterDesc1.DedicatedVideoMemory;
-				ThrowIfFailed(dxgiAdapter1.As(&dxgiAdapter4));
+				MaxDedicatedVideoMemory = dxgiAdapterDesc1.DedicatedVideoMemory;
+				ThrowIfFailed(DXGIAdapter1.As(&DXGIAdapter4));
 			}
 		}
 	}
 
-	return dxgiAdapter4;
+	return DXGIAdapter4;
 }
 
 
@@ -1058,10 +1149,14 @@ ComPtr<ID3D12CommandQueue> Ray_DX12HardwareRenderer::CreateCommandQueue(ComPtr<I
 {
 	ComPtr<ID3D12CommandQueue> D3D12CommandQueue;
 
-	D3D12_COMMAND_QUEUE_DESC desc = {};
+	D3D12_COMMAND_QUEUE_DESC desc = {}; 
 	desc.Type = InType;
 	desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+#if defined(_DEBUG)
+	desc.Flags = D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT;
+#else
 	desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+#endif
 	desc.NodeMask = 0;
 
 	ThrowIfFailed(InDevice->CreateCommandQueue(&desc, IID_PPV_ARGS(&D3D12CommandQueue)));
@@ -1199,19 +1294,19 @@ void  Ray_DX12HardwareRenderer::UpdateRenderTargetViews(ComPtr<ID3D12Device2>   
 }
 
 
-ComPtr<ID3D12CommandAllocator> Ray_DX12HardwareRenderer::CreateCommandAllocator(ComPtr<ID3D12Device2>   InDevice
-	, D3D12_COMMAND_LIST_TYPE InType)
+ComPtr<ID3D12CommandAllocator> Ray_DX12HardwareRenderer::CreateCommandAllocator( ComPtr<ID3D12Device2> InDevice
+																			   , D3D12_COMMAND_LIST_TYPE InType )
 {
 	ComPtr<ID3D12CommandAllocator> CommandAllocator;
-	ThrowIfFailed(InDevice->CreateCommandAllocator(InType, IID_PPV_ARGS(&CommandAllocator)));
+	ThrowIfFailed( InDevice->CreateCommandAllocator(InType, IID_PPV_ARGS(&CommandAllocator)) );
 	return CommandAllocator;
 }
 
 
 
-ComPtr<ID3D12GraphicsCommandList4> Ray_DX12HardwareRenderer::CreateCommandList(ComPtr<ID3D12Device2> InDevice
-		, ComPtr<ID3D12CommandAllocator> InCommandAllocator
-		, D3D12_COMMAND_LIST_TYPE InType)
+ComPtr<ID3D12GraphicsCommandList4> Ray_DX12HardwareRenderer::CreateCommandList( ComPtr<ID3D12Device2> InDevice
+		                                                                     ,  ComPtr<ID3D12CommandAllocator> InCommandAllocator
+		                                                                      , D3D12_COMMAND_LIST_TYPE InType)
 {
 	ComPtr<ID3D12GraphicsCommandList4> CommandList;
 
@@ -1222,7 +1317,6 @@ ComPtr<ID3D12GraphicsCommandList4> Ray_DX12HardwareRenderer::CreateCommandList(C
 	ThrowIfFailed(CommandList->Close());
 
 	return CommandList;
-
 }
 
 
@@ -1233,7 +1327,7 @@ void Ray_DX12HardwareRenderer::BeginFrame(float* InClearColor)
 	// TODO: remove cbuffer update from here (must go in update section of the sample at most) ///
 	SceneConstants SceneCB = { };
 
-	SceneCB.CameraPosition = { 0.0f,0.0f,-2.5f, 0.0f };
+	SceneCB.CameraPosition = { 0.0f,0.0f,-0.75f, 0.0f };
 
 	memcpy(mSceneConstantsCB_DataPtr, &SceneCB, sizeof(SceneConstants));
 	//////////////////////////////////////////////////////////////////////////////////////////////
@@ -1241,12 +1335,12 @@ void Ray_DX12HardwareRenderer::BeginFrame(float* InClearColor)
 
 	//Beginning of the frame
 	float DefaultClearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
-	auto commandAllocator = mD3DCommandAllocator[mBackBufferIndex];
+	auto commandAllocator = mD3DCommandAllocators[mBackBufferIndex];
 	auto backBuffer = mRenderTargets[mBackBufferIndex];
 
 	//Before any commands can be recorded into the command list, the command allocator and command list needs to be reset to their initial state.
-	commandAllocator->Reset();
-	mD3DCommandList->Reset(commandAllocator.Get(), nullptr);
+	ThrowIfFailed(commandAllocator->Reset());
+	ThrowIfFailed(mD3DCommandList->Reset(commandAllocator.Get(), nullptr));
 
 	//Before the render target can be cleared, it must be transitioned to the RENDER_TARGET state.
 
@@ -1264,25 +1358,6 @@ void Ray_DX12HardwareRenderer::BeginFrame(float* InClearColor)
 }
 
 
-void Ray_DX12HardwareRenderer::CopyRayTracingOutputToBackBuffer()
-{
-	auto CommandList = mD3DCommandList.Get();
-	auto BackBuffer = mRenderTargets[mBackBufferIndex].Get();
-
-	D3D12_RESOURCE_BARRIER preCopyBarriers[2];
-	preCopyBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
-	preCopyBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(mRayTracingOutputBuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-	CommandList->ResourceBarrier(ARRAYSIZE(preCopyBarriers), preCopyBarriers);
-
-	CommandList->CopyResource(BackBuffer, mRayTracingOutputBuffer.Get());
-
-	D3D12_RESOURCE_BARRIER postCopyBarriers[2];
-	postCopyBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
-	postCopyBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(mRayTracingOutputBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-	CommandList->ResourceBarrier(ARRAYSIZE(postCopyBarriers), postCopyBarriers);
-}
-
 void Ray_DX12HardwareRenderer::Render()
 {
 	//TODO: We might want to refactor this one as well
@@ -1292,7 +1367,7 @@ void Ray_DX12HardwareRenderer::Render()
 
 	// Here we prepare a lamda function that performs a call to DispatchRays
 	// Which basically will create a Grid in which each element is a ray 
-	auto DispatchRays = [&](auto* commandList, auto* stateObject, auto* dispatchDesc)
+	auto DispatchRays = [&](auto* commandList, auto* dispatchDesc,auto* stateObject)
 	{
 		// Since each shader table has only one shader record, the stride is same as the size.
 		dispatchDesc->HitGroupTable.StartAddress = mHitGroupShaderTable->GetGPUVirtualAddress();
@@ -1305,7 +1380,7 @@ void Ray_DX12HardwareRenderer::Render()
 		dispatchDesc->RayGenerationShaderRecord.SizeInBytes = mRayGenShaderTable->GetDesc().Width;
 		dispatchDesc->Width = mWidth;
 		dispatchDesc->Height = mHeight;
-		dispatchDesc->Depth = 1;
+		dispatchDesc->Depth = 1;	
 		commandList->SetPipelineState1(stateObject);
 		commandList->DispatchRays(dispatchDesc);
 	};
@@ -1313,27 +1388,50 @@ void Ray_DX12HardwareRenderer::Render()
 
 	CommandList->SetComputeRootSignature(mRaytracingGlobalRootSignature.Get());
 
-	D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
-
 	// Set the descriptor heap(s)
 	CommandList->SetDescriptorHeaps(1, mCBVSRVDescriptorHeap.GetAddressOf());
 	
 	// UAV output buffer is set as a descriptor table
-	CommandList->SetComputeRootDescriptorTable(GlobalRootSignatureParams::OutputViewSlot, mRaytracingOutputResourceUAVGpuDescriptor);
-
-	// Top level acceleration structure is set as a Shader Resource View
-	CommandList->SetComputeRootShaderResourceView(GlobalRootSignatureParams::AccelerationStructureSlot, mTLAS->GetGPUVirtualAddress());
+	CommandList->SetComputeRootDescriptorTable(GlobalRootSignatureParams::OutputViewSlot, mRaytracingOutputResourceUAVGpuDescriptor);	
 	
 	// Scene constant buffer
 	CommandList->SetComputeRootDescriptorTable(GlobalRootSignatureParams::SceneConstantBuffer, mSceneConstantsHandle);
 	
 	//CommandList->SetComputeRootConstantBufferView(GlobalRootSignatureParams::SceneConstantBuffer, mSceneConstantsCB->GetGPUVirtualAddress());
 	
+	D3D12_DISPATCH_RAYS_DESC DispatchDesc = {};
+
+	// For each object TLAS trace rays (eventtually move this portion of the code outside)
+	// Top level acceleration structure is set as a Shader Resource View
+	CommandList->SetComputeRootShaderResourceView(GlobalRootSignatureParams::AccelerationStructureSlot, mRayTracingRenderPacket.mTLAS->GetGPUVirtualAddress());
+
 	// Then we are ready to dispatch rays
-	DispatchRays(CommandList, mDXRStateObject.Get(), &dispatchDesc);
+	DispatchRays(CommandList, &DispatchDesc,mDXRStateObject.Get());
+			
 
 	// Done! Copy the result on backbuffer ready to be displayed
 	CopyRayTracingOutputToBackBuffer();
+}
+
+
+void Ray_DX12HardwareRenderer::CopyRayTracingOutputToBackBuffer()
+{
+	auto CommandList = mD3DCommandList.Get();
+	auto BackBuffer = mRenderTargets[mBackBufferIndex].Get();
+
+	D3D12_RESOURCE_BARRIER preCopyBarriers[2];
+	preCopyBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
+	preCopyBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(mRayTracingOutputBuffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	
+	CommandList->ResourceBarrier(ARRAYSIZE(preCopyBarriers), preCopyBarriers);
+
+	CommandList->CopyResource(BackBuffer, mRayTracingOutputBuffer.Get());
+
+	D3D12_RESOURCE_BARRIER postCopyBarriers[2];
+	postCopyBarriers[0] = CD3DX12_RESOURCE_BARRIER::Transition(BackBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+	postCopyBarriers[1] = CD3DX12_RESOURCE_BARRIER::Transition(mRayTracingOutputBuffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+	CommandList->ResourceBarrier(ARRAYSIZE(postCopyBarriers), postCopyBarriers);
 }
 
 
@@ -1352,7 +1450,9 @@ void Ray_DX12HardwareRenderer::EndFrame()
 	ThrowIfFailed(mSwapChain->Present(SyncInterval, PresentFlags));
 
 	// Wait for the  previous frame to finish
-	WaitForPreviousFrame();
+	//WaitForPreviousFrame();
+
+	MoveToNextFrame();
 }
 
 

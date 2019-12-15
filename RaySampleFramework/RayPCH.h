@@ -67,3 +67,4 @@ typedef uint64_t u64;
 
 // This is the base asset root dir
 const std::string gAssetRootDir = "../Assets/";
+

@@ -44,7 +44,7 @@ void Ray_DX12HelloWorldSample::OnRender()
 
 
 
-		//Perform draws/dispatch here
+		//Perform draws/dispatch rays/dispatch here
 		auto DX12HRenderer = static_cast<Ray_DX12HardwareRenderer*>(mHardwareRenderer.get());
 		auto CmdList = DX12HRenderer->GetCommandList();
 		

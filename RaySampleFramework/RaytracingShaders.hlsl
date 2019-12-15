@@ -55,7 +55,7 @@ void RayCastingShader()
 	const float ScaleY = tan(HFov);
 	const float ScaleX = ScaleY * AspectRatio;
 	// Camera is positioned one unit away from the origin along Z
-	const float3 CameraEye = CameraPosition; // float3(0.0f, 0.0f, -2.5f);
+	const float3 CameraEye = CameraPosition; 
 
 	// We assume a fixed camera looking down positive Z 
 	// The up axis in our case is Y
@@ -87,9 +87,10 @@ void RayCastingShader()
 	// RayPayload is user defined struct in which we can return the return result of the TraceRay call
 	RayPayload payload = { float4(0, 0, 0, 0) };
 
-	// TraceRay is the new HLSL intrinsic that starts the ray tracing process
+	// TraceRay is the new HLSL intrinsic that starts the ray tracing process	
 	TraceRay(Scene, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, ~0, 0, 1, 0, ray, payload);
-
+	
+	
 	// If we hit an object we return its color
 	RenderTarget[DispatchRaysIndex().xy] = payload.color;
 }
@@ -97,10 +98,11 @@ void RayCastingShader()
 [shader("closesthit")]
 void RayCastingClosestHit(inout RayPayload payload, in IntersectionAttributes attr)
 {
-	//float3 barycentrics = float3(1 - attr.barycentrics.x - attr.barycentrics.y, attr.barycentrics.x, attr.barycentrics.y);
+	float3 barycentrics = float3(1 - attr.barycentrics.x - attr.barycentrics.y, attr.barycentrics.x, attr.barycentrics.y);
 	
 	// We return green to be consistent with the previous example
-	payload.color = float4(0.0f, 1.0f,0.0f, 1.0f);
+	payload.color = float4(barycentrics, 1.0f);
+	//payload.color = float4(0.f,1.f,0.f, 1.0f);
 }
 
 [shader("miss")]
