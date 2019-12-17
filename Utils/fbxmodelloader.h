@@ -6,31 +6,16 @@
 
 
 struct MyVertex
-{
-	float pos[3];
-	float n[3];
-	float uv[2];
+{	
+	float pos[3];  // position
+	float tg[4];   // tangent 
+	float n[3];    // normal
+	float uv[2];   // uv coords (one channel for now)
 };
 
 
 struct SMeshSection
 {
-
-	SMeshSection() = default;
-
-	~SMeshSection()
-	{
-
-		if (mIndexBuffer)
-		{
-			// TODO: Handle index buffer deallocation (I was getting a strange crash on the pointer. Looking for a better way to handle this)
-			//delete [] ((u16*)mIndexBuffer);
-			mIndexBuffer = nullptr;
-			mIndexCount = 0;
-		}
-	}
-
-
 	void* mIndexBuffer = nullptr;
 	int   mIndexCount = 0;
 	int   mMaterialID = -1;
@@ -38,8 +23,6 @@ struct SMeshSection
 
 struct SMesh
 {
-	SMesh() = default;
-
 	std::vector<SMeshSection> mMeshSections;
 	std::vector<MyVertex> mVertexBuffer;
 	bool  mUse32BitIndices = false;
@@ -48,10 +31,8 @@ struct SMesh
 
 struct SModel
 {
-	SModel() = default;
-
 	std::vector<SMesh> mMeshes;
-};
+}; 
 
 
 class FBXModelLoader
@@ -73,7 +54,7 @@ public:
 		return Instance;
 	}
 
-	bool Load(const char* PathToFile, SModel& OutModel,bool bNoMeshSections = false)
+	bool Load(const char* PathToFile, SModel& OutModel)
 	{
 		if (mFbxSdkManager == nullptr)
 		{
@@ -107,7 +88,7 @@ public:
 		const int ChildCount = Node->GetChildCount();
 		for (int c = 0; c < ChildCount; ++c)
 		{
-			TraverseScene(Node->GetChild(c), OutModel, bNoMeshSections, ExtractMeshData);
+			TraverseScene(Node->GetChild(c), OutModel, ExtractMeshData);
 		}
 
 
@@ -117,7 +98,25 @@ public:
 private:
 
 
-	static FbxVector4 MultT(FbxNode* Node, FbxVector4 vector) 
+	static FbxLayerElementArrayTemplate<int>* GetMaterialIndices(FbxMesh* pMesh)
+	{
+		//FbxGeometryElement::EMappingMode materialMappingMode = FbxGeometryElement::eNone;
+		if (pMesh->GetElementMaterial())
+		{
+			FbxLayerElementArrayTemplate<int>* MaterialIndices = &pMesh->GetElementMaterial()->GetIndexArray();
+			SmartPrintf("ArrayCount: %d\n", MaterialIndices->GetCount());
+			for (int i = 0; i < MaterialIndices->GetCount(); i++)
+			{
+				SmartPrintf("%d ", MaterialIndices->GetAt(i));
+			}
+			SmartPrintf("\n");
+			return MaterialIndices;
+		}
+		return nullptr;
+
+	}
+
+	static FbxVector4 MultiplyT(FbxNode* Node, FbxVector4 vector)
 	{
 		FbxAMatrix matrixGeo;
 		matrixGeo.SetIdentity();
@@ -130,42 +129,15 @@ private:
 			matrixGeo.SetR(lR);
 			matrixGeo.SetS(lS);
 		}
-
 		FbxAMatrix globalMatrix = Node->EvaluateLocalTransform();
-
 		FbxAMatrix matrix = globalMatrix * matrixGeo;
 		FbxVector4 result = matrix.MultT(vector);
-		
 		return result;
 	}
 
 
-	static FbxLayerElementArrayTemplate<int>* GetMaterialIndices(FbxMesh* pMesh)
-	{
-		//SmartPrintf("LayerCount: %d\n", pMesh->GetLayerCount());
-		FbxLayerElementArrayTemplate<int>* TmpArray = nullptr;
-		if (pMesh->GetLayerCount() >= 1)
-		{
-			FbxLayerElementMaterial* LayerMaterial = pMesh->GetLayer(0)->GetMaterials();
-			if (LayerMaterial)
-			{
-				FbxLayerElementArrayTemplate<int>* TmpArray = &LayerMaterial->GetIndexArray();
-				//SmartPrintf("ArrayCount: %d\n", TmpArray->GetCount());
-				//for (int i = 0; i < TmpArray->GetCount(); i++)
-				//{
-				//	SmartPrintf("%d ", TmpArray->GetAt(i));
-				//}
-				//SmartPrintf("\n");
-				return TmpArray;
-			}
-			return nullptr;
-		}
-		return nullptr;
-	}
-
-
 	// We extract just vertices 
-	static void ExtractMeshData(FbxMesh* Mesh,FbxNode* Node, SMesh& OutMesh, bool bNoMeshSections)
+	static void ExtractMeshData(FbxMesh* Mesh, FbxNode* Node, SMesh& OutMesh)
 	{
 		const int UVCount = Mesh->GetElementUVCount();
 		const int NormalCount = Mesh->GetElementNormalCount();
@@ -176,6 +148,14 @@ private:
 		const bool HasNormal = NormalCount > 0;
 		const bool HasUV = UVCount > 0;
 		const bool HasTangent = TangentCount > 0;
+
+		// Tangent array 
+		FbxLayerElementArrayTemplate<FbxVector4>* TangentArray = nullptr;
+		if (!HasTangent)
+		{
+			Mesh->GenerateTangentsDataForAllUVSets();
+			Mesh->GetTangents(&TangentArray);
+		}
 
 		// Reserve memory for vertices 
 		OutMesh.mVertexBuffer.reserve(NumVertices);
@@ -189,7 +169,8 @@ private:
 
 			FbxVector4 Coord = Mesh->GetControlPointAt(j);
 
-			Coord = MultT(Node,Coord);
+			// Accumulate transform to get the mesh in the right position
+			Coord = MultiplyT(Node, Coord);
 
 			MyVertex vertex;
 
@@ -202,46 +183,63 @@ private:
 
 		// Extract this mesh elements		
 		bool Use32BitIndices = (NumVertices > 65536);
-
-		OutMesh.mUse32BitIndices = Use32BitIndices;
-
 		const auto MeshSectionCount = OutMesh.mMeshSections.size();
-
 		std::vector< std::vector<unsigned int> > TempIndexArray(MeshSectionCount);
-
+		OutMesh.mUse32BitIndices = Use32BitIndices;
 		for (int PolyIndex = 0; PolyIndex < TriangleCount; ++PolyIndex)
 		{
-			// Index of a given mesh section with a given material			
-			const int MeshSectionIndex = MaterialIndices ? MaterialIndices->GetAt(PolyIndex) : 0; 	
-			assert(MeshSectionIndex < OutMesh.mMeshSections.size() || bNoMeshSections);
+			// Index of a given mesh section with a given material
+			const int MaterialIndex = MaterialIndices->GetAt(PolyIndex);
+			assert(MaterialIndex < OutMesh.mMeshSections.size());
+			const auto PolygonSize = Mesh->GetPolygonSize(PolyIndex);
 
-			for (int VtxIdx = 0; VtxIdx < 3; ++VtxIdx)
+			for (int VtxIdx = PolygonSize - 1; VtxIdx >= 0; --VtxIdx)
 			{
 				// Read Indices	
 				const int Index = Mesh->GetPolygonVertex(PolyIndex, VtxIdx);
-				TempIndexArray[bNoMeshSections ? 0 : MeshSectionIndex].push_back(Index);
 
-				// Read UVs
-				FbxVector2 OutUV;
-				bool bUnmapped;
-				for (int u = 0; u < UVCount; ++u)
+				// Store indices
+				TempIndexArray[MaterialIndex].push_back(Index);
+
+				if (HasUV)
 				{
-					auto ElementUV = Mesh->GetElementUV(u);
-					if (ElementUV && Mesh->GetPolygonVertexUV(PolyIndex, VtxIdx, ElementUV->GetName(), OutUV, bUnmapped))
+					// Read UVs
+					FbxVector2 OutUV;
+					bool bUnmapped;
+					for (int u = 0; u < UVCount; ++u)
 					{
-						OutMesh.mVertexBuffer[Index].uv[0] = bUnmapped ? 0.f : (float)OutUV[0];
-						OutMesh.mVertexBuffer[Index].uv[1] = bUnmapped ? 0.f : (float)OutUV[1];
+						auto ElementUV = Mesh->GetElementUV(u);
+						if (ElementUV && Mesh->GetPolygonVertexUV(PolyIndex, VtxIdx, ElementUV->GetName(), OutUV, bUnmapped))
+						{
+							OutMesh.mVertexBuffer[Index].uv[0] = bUnmapped ? 0.f : (float)OutUV[0];
+							OutMesh.mVertexBuffer[Index].uv[1] = bUnmapped ? 0.f : (float)OutUV[1];
+						}
 					}
 				}
 
-				// Read Normals
-				FbxVector4 normal;
-				if (Mesh->GetPolygonVertexNormal(PolyIndex, VtxIdx, normal))
+				if (HasNormal)
 				{
-					OutMesh.mVertexBuffer[Index].n[0] = (float)normal[0];
-					OutMesh.mVertexBuffer[Index].n[1] = (float)normal[1];
-					OutMesh.mVertexBuffer[Index].n[2] = (float)normal[2];
+					// Read Normals
+					FbxVector4 normal;
+					if (Mesh->GetPolygonVertexNormal(PolyIndex, VtxIdx, normal))
+					{
+						OutMesh.mVertexBuffer[Index].n[0] = (float)normal[0];
+						OutMesh.mVertexBuffer[Index].n[1] = (float)normal[1];
+						OutMesh.mVertexBuffer[Index].n[2] = (float)normal[2];
+					}
 				}
+
+
+				if (TangentArray)
+				{
+					// read tangents
+					const auto& tangent = TangentArray->GetAt(Index);
+					OutMesh.mVertexBuffer[Index].tg[0] = (float)tangent[0];
+					OutMesh.mVertexBuffer[Index].tg[1] = (float)tangent[1];
+					OutMesh.mVertexBuffer[Index].tg[2] = (float)tangent[2];
+					OutMesh.mVertexBuffer[Index].tg[3] = (float)tangent[3];
+				}
+
 			}
 		}
 
@@ -251,20 +249,7 @@ private:
 		for (auto& MeshSection : OutMesh.mMeshSections)
 		{
 			MeshSection.mMaterialID = MeshSectionIndex;
-			size_t IndexCount = TempIndexArray[bNoMeshSections ? 0 : MeshSectionIndex].size();
-
-			//assert((IndexCount % 3) == 0);
-			//u32 lol = 1;
-			//for (u32 idx=0;idx<IndexCount;idx+=3)
-			//{
-			//	if (lol % 2)
-			//	{
-			//		std::swap(TempIndexArray[MeshSectionIndex][idx], TempIndexArray[MeshSectionIndex][idx + 2]);
-			//	}
-			//	++lol;
-			//}
-
-
+			size_t IndexCount = TempIndexArray[MeshSectionIndex].size();
 			MeshSection.mIndexCount = (int)IndexCount;
 			if (Use32BitIndices)
 			{
@@ -290,10 +275,9 @@ private:
 			++MeshSectionIndex;
 		}
 
-
 	}
 
-	void TraverseScene(FbxNode* Node, SModel& OutModel,bool bNoMeshSections,void(*ExtractMeshDataCallback)(FbxMesh*, FbxNode*, SMesh&,bool))
+	void TraverseScene(FbxNode* Node, SModel& OutModel, void(*ExtractMeshDataCallback)(FbxMesh*, FbxNode*, SMesh&))
 	{
 
 		if (Node == nullptr)
@@ -310,20 +294,24 @@ private:
 		switch (Attr->GetAttributeType()) {
 		case FbxNodeAttribute::eMesh:
 		{
+			// Triangulate Geometry
+			FbxGeometryConverter FbxConverter(Node->GetFbxManager());
+			FbxConverter.Triangulate(Node->GetNodeAttribute(), true);
+
 			FbxMesh* Mesh = Node->GetMesh();
 			if (Mesh != nullptr)
 			{
 				// Get the total number of materials
-				const size_t MaterialCount = Node->GetMaterialCount();				
+				const size_t MaterialCount = Node->GetMaterialCount();
 
 				// Create our internal mesh
 				SMesh mesh;
 
-				// We have as many mesh sections as are the total number of materials. If we don't have materials, let's create at list one mesh section.
-				mesh.mMeshSections.resize((MaterialCount == 0 || bNoMeshSections) ? 1 : MaterialCount);
+				// We have as many mesh sections as are the total number of materials
+				mesh.mMeshSections.resize(MaterialCount);
 
 				// We extract the data from the FBX
-				ExtractMeshDataCallback(Mesh,Node,mesh,bNoMeshSections);
+				ExtractMeshDataCallback(Mesh, Node, mesh);
 
 				// After we've created our internal mesh, we store it into our model struct 
 				OutModel.mMeshes.push_back(mesh);
@@ -337,7 +325,7 @@ private:
 		const int ChildCount = Node->GetChildCount();
 		for (int i = 0; i < ChildCount; i++)
 		{
-			TraverseScene(Node->GetChild(i), OutModel, bNoMeshSections, ExtractMeshDataCallback);
+			TraverseScene(Node->GetChild(i), OutModel, ExtractMeshDataCallback);
 		}
 
 	}

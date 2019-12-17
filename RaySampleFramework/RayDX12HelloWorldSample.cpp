@@ -40,7 +40,7 @@ void Ray_DX12HelloWorldSample::OnRender()
 		float ClearColor[] = {1.0f,0.0f,0.0f,1.0f};
 
 		//Beginning of the frame
-		mHardwareRenderer->BeginFrame(ClearColor);
+		mHardwareRenderer->BeginFrame();
 
 
 

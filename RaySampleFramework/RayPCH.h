@@ -68,3 +68,14 @@ typedef uint64_t u64;
 // This is the base asset root dir
 const std::string gAssetRootDir = "../Assets/";
 
+// Helper to print on visual studio output 
+template <typename ... Args>
+void SmartPrintf(char const* const format,
+	Args const& ... args) noexcept
+{
+#ifdef _DEBUG
+	char Buf[128];
+	sprintf_s(Buf, format, args ...);
+	OutputDebugStringA(Buf);
+#endif
+}

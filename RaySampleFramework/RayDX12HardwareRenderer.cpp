@@ -521,7 +521,7 @@ void Ray_DX12HardwareRenderer::BuildGeometry()
 
 	// Loads vertices and indices from FBX file
 	SModel model;
-	FBXModelLoader::Get().Load((gAssetRootDir + "Plane.fbx").c_str(), model);
+	FBXModelLoader::Get().Load((gAssetRootDir + "Cicada.fbx").c_str(), model);
 
 	// This helper functions creates a buffer resource of type committed and upload vertex and index data in each one of them
 	ComPtr<ID3D12Resource> VB;
@@ -584,20 +584,18 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 
 	std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> GeometryDescs;
 	for (auto& RPacket : mRenderList)
-	{
-		// Convert packet id to wstring
-		//std::wstring StrPacketID(std::to_wstring(PacketID));
+	{		
 
 		bool Use32BitIndices = (RPacket.mVertexCount > 65536);
 
 		D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
 		geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
 		geometryDesc.Triangles.IndexBuffer = RPacket.mIB->GetGPUVirtualAddress();
-		geometryDesc.Triangles.IndexCount = RPacket.mIndexCount; // static_cast<UINT>(RPacket.mIB->GetDesc().Width) / sizeof(u16);
+		geometryDesc.Triangles.IndexCount = RPacket.mIndexCount;
 		geometryDesc.Triangles.IndexFormat = Use32BitIndices ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT;
 		geometryDesc.Triangles.Transform3x4 = 0;
 		geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-		geometryDesc.Triangles.VertexCount = RPacket.mVertexCount; //static_cast<UINT>(RPacket.mVB->GetDesc().Width) / sizeof(MyVertex);
+		geometryDesc.Triangles.VertexCount = RPacket.mVertexCount; 
 		geometryDesc.Triangles.VertexBuffer.StartAddress = RPacket.mVB->GetGPUVirtualAddress();
 		geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(MyVertex);
 
@@ -1327,7 +1325,8 @@ void Ray_DX12HardwareRenderer::BeginFrame(float* InClearColor)
 	// TODO: remove cbuffer update from here (must go in update section of the sample at most) ///
 	SceneConstants SceneCB = { };
 
-	SceneCB.CameraPosition = { 0.0f,0.0f,-0.75f, 0.0f };
+	SceneCB.CameraPosition = { -150.0f,150.0f,150.0f, 0.0f };
+	//SceneCB.CameraPosition = { 0.0f,0.0f,2.0f, 0.0f };
 
 	memcpy(mSceneConstantsCB_DataPtr, &SceneCB, sizeof(SceneConstants));
 	//////////////////////////////////////////////////////////////////////////////////////////////

@@ -44,7 +44,7 @@ void RayCastingShader()
 
 	// Re-normalize to -1,1 range
 	NormCoords.x =  NormCoords.x*2.0f - 1.0f;
-	NormCoords.y =  NormCoords.y*2.0f - 1.0f;
+	NormCoords.y =  1.0f - NormCoords.y*2.0f;
 
 	// Construct the ray in world space with a perspective projection
 	// The projection data and camera data are normally passed from the application through a CBuffer, but 
@@ -64,16 +64,15 @@ void RayCastingShader()
 	float3 w = float3(0, 0, 1);
 
 	// Let's suppose this is our look at position (target)
-	float3 LookAt = float3(0.0f,0.0f,5.0f);
-	w = normalize(LookAt - CameraEye);
-    u = cross(w,float3(0.0f,1.0f,0.0f));
-	v = cross(u, w);
-	
+	float3 LookAt = float3(0.0f,0.0f,0.0f);
+	w = normalize(CameraEye-LookAt);
+    u = cross(float3(0.0f, 1.0f, 0.0f),w);
+	v = cross(w,u);
 	
 	// Here we construct a world space ray starting from the perspective camera position
-	float3 rayDir = u * ScaleX * NormCoords.x + v * ScaleY * NormCoords.y + w;
+	float3 rayDir = (u * ScaleX * NormCoords.x + v * ScaleY * NormCoords.y - w);
 	float3 origin = CameraEye;
-
+	
 	// Here we start tracing rays
 	// RayDesc is a built in HLSL struct
 	RayDesc ray;
@@ -82,7 +81,7 @@ void RayCastingShader()
 
 	// Remember tmin and tmax? We set them here as well to account for certain precision issues
 	ray.TMin = 0.001;
-	ray.TMax = 10000.0;
+	ray.TMax = 1000.0;
 
 	// RayPayload is user defined struct in which we can return the return result of the TraceRay call
 	RayPayload payload = { float4(0, 0, 0, 0) };
@@ -98,7 +97,7 @@ void RayCastingShader()
 [shader("closesthit")]
 void RayCastingClosestHit(inout RayPayload payload, in IntersectionAttributes attr)
 {
-	float3 barycentrics = float3(1 - attr.barycentrics.x - attr.barycentrics.y, attr.barycentrics.x, attr.barycentrics.y);
+	float3 barycentrics = float3(attr.barycentrics.x, attr.barycentrics.y, 1 - attr.barycentrics.x - attr.barycentrics.y);
 	
 	// We return green to be consistent with the previous example
 	payload.color = float4(barycentrics, 1.0f);
