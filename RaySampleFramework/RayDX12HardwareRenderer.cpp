@@ -52,7 +52,7 @@ static inline void ThrowIfFalse(bool Value)
 }
 
 //Align power of two sizes
-static inline u32 Align(u32 size, u32 alignment)
+static inline size_t Align(size_t size, size_t alignment)
 {
 	return (size + (alignment - 1)) & ~(alignment - 1);
 }
@@ -108,33 +108,36 @@ inline void AllocateUploadBuffer(ID3D12Device* Device, void *Data, u64 Datasize,
 class GpuUploadBuffer
 {
 public:
-	ComPtr<ID3D12Resource> GetResource() { return m_resource; }
+
+	ComPtr<ID3D12Resource> GetResource() const noexcept { return mResource; }
 
 protected:
-	ComPtr<ID3D12Resource> m_resource;
+
+	ComPtr<ID3D12Resource> mResource;
 
 	GpuUploadBuffer() {}
+
 	~GpuUploadBuffer()
 	{
-		if (m_resource.Get())
+		if (mResource.Get())
 		{
-			m_resource->Unmap(0, nullptr);
+			mResource->Unmap(0, nullptr);
 		}
 	}
 
-	void Allocate(ID3D12Device* device, UINT bufferSize, LPCWSTR resourceName = nullptr)
+	void Allocate(ID3D12Device* InDevice, size_t InBufferSize, LPCWSTR InResourceName = nullptr)
 	{
 		auto UploadHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
-		auto BufferDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
-		ThrowIfFailed(device->CreateCommittedResource(
+		auto BufferDesc = CD3DX12_RESOURCE_DESC::Buffer(InBufferSize);
+		ThrowIfFailed(InDevice->CreateCommittedResource(
 			&UploadHeapProperties,
 			D3D12_HEAP_FLAG_NONE,
 			&BufferDesc,
 			D3D12_RESOURCE_STATE_GENERIC_READ,
 			nullptr,
-			IID_PPV_ARGS(&m_resource)));
-		m_resource->SetName(resourceName);
+			IID_PPV_ARGS(&mResource)));
+		mResource->SetName(InResourceName);
 	}
 
 	u8* MapCpuWriteOnly()
@@ -142,7 +145,7 @@ protected:
 	    u8* MappedData;
 		// We don't unmap this until the app closes. Keeping buffer mapped for the lifetime of the resource is okay.
 		CD3DX12_RANGE ReadRange(0, 0);        // We do not intend to read from this resource on the CPU.
-		ThrowIfFailed(m_resource->Map(0, &ReadRange, reinterpret_cast<void**>(&MappedData)));
+		ThrowIfFailed(mResource->Map(0, &ReadRange, reinterpret_cast<void**>(&MappedData)));
 		return MappedData;
 	}
 };
@@ -152,90 +155,115 @@ protected:
 class ShaderRecord
 {
 public:
-	ShaderRecord(void* pShaderIdentifier, UINT shaderIdentifierSize) :
-		shaderIdentifier(pShaderIdentifier, shaderIdentifierSize)
+	
+	ShaderRecord(void* pShaderIdentifier, size_t shaderIdentifierSize) :
+	mShaderIdentifier(pShaderIdentifier, shaderIdentifierSize)
 	{
+	
 	}
 
-	ShaderRecord(void* pShaderIdentifier, UINT shaderIdentifierSize, void* pLocalRootArguments, UINT localRootArgumentsSize) :
-		shaderIdentifier(pShaderIdentifier, shaderIdentifierSize),
-		localRootArguments(pLocalRootArguments, localRootArgumentsSize)
+	ShaderRecord(void* pShaderIdentifier, size_t shaderIdentifierSize, void* pLocalRootArguments, size_t localRootArgumentsSize) :
+	mShaderIdentifier(pShaderIdentifier, shaderIdentifierSize),
+	mLocalRootArguments(pLocalRootArguments, localRootArgumentsSize)
+	
 	{
+	
 	}
 
 	void CopyTo(void* dest) const
 	{
-		uint8_t* byteDest = static_cast<uint8_t*>(dest);
-		memcpy(byteDest, shaderIdentifier.ptr, shaderIdentifier.size);
-		if (localRootArguments.ptr)
+		u8* ByteDest = static_cast<u8*>(dest);
+
+		memcpy(ByteDest, mShaderIdentifier.ptr, mShaderIdentifier.size);
+
+		if (mLocalRootArguments.ptr)
 		{
-			memcpy(byteDest + shaderIdentifier.size, localRootArguments.ptr, localRootArguments.size);
+			memcpy(ByteDest + mShaderIdentifier.size, mLocalRootArguments.ptr, mLocalRootArguments.size);
 		}
 	}
 
-	struct PointerWithSize {
-		void *ptr;
-		UINT size;
-
+	struct PointerWithSize 
+	{
 		PointerWithSize() : ptr(nullptr), size(0) {}
-		PointerWithSize(void* _ptr, UINT _size) : ptr(_ptr), size(_size) {};
+
+		PointerWithSize(void* _ptr, size_t _size) : ptr(_ptr), size(_size) {}
+
+		void *ptr;
+		size_t size;				
 	};
-	PointerWithSize shaderIdentifier;
-	PointerWithSize localRootArguments;
+
+	PointerWithSize mShaderIdentifier;
+
+	PointerWithSize mLocalRootArguments;
 };
 
 
 // Shader table = {{ ShaderRecord 1}, {ShaderRecord 2}, ...}
 class ShaderTable : public GpuUploadBuffer
 {
-	u8* m_mappedShaderRecords;
-	UINT m_shaderRecordSize;
-
-	// Debug support
-	std::wstring m_name;
-	std::vector<ShaderRecord> m_shaderRecords;
-
-	ShaderTable() {}
 public:
-	ShaderTable(ID3D12Device* device, UINT numShaderRecords, UINT shaderRecordSize, LPCWSTR resourceName = nullptr)
-		: m_name(resourceName)
+	ShaderTable(ID3D12Device* InDevice, u32 InNumShaderRecords, size_t InShaderRecordSize, LPCWSTR InResourceName = nullptr)
+		: mName(InResourceName)
 	{
-		m_shaderRecordSize = Align(shaderRecordSize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
-		m_shaderRecords.reserve(numShaderRecords);
-		UINT bufferSize = numShaderRecords * m_shaderRecordSize;
-		Allocate(device, bufferSize, resourceName);
-		m_mappedShaderRecords = MapCpuWriteOnly();
+		// Shader record size must be aligned to 32 bytes
+		mShaderRecordSize = Align(InShaderRecordSize, D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
+
+		// Let's reserve some memory necessary to hold a given number of shader record
+		mShaderRecords.reserve(InNumShaderRecords);
+
+		// The total shader table size in bytes
+		size_t BufferSize = InNumShaderRecords * mShaderRecordSize;
+		
+		// Allocate the upload buffer
+		Allocate(InDevice, BufferSize, InResourceName);
+		
+		// Map shader records to be written by the CPU 
+		mMappedShaderRecords = MapCpuWriteOnly();
 	}
 
-	void push_back(const ShaderRecord& shaderRecord)
+	void push_back(const ShaderRecord& InShaderRecord)
 	{
-		ThrowIfFalse(m_shaderRecords.size() < m_shaderRecords.capacity());
-		m_shaderRecords.push_back(shaderRecord);
-		shaderRecord.CopyTo(m_mappedShaderRecords);
-		m_mappedShaderRecords += m_shaderRecordSize;
+		ThrowIfFalse(mShaderRecords.size() < mShaderRecords.capacity());
+		mShaderRecords.push_back(InShaderRecord);
+		InShaderRecord.CopyTo(mMappedShaderRecords);
+		mMappedShaderRecords += mShaderRecordSize;
 	}
 
-	UINT GetShaderRecordSize() { return m_shaderRecordSize; }
+	size_t GetShaderRecordSize() const noexcept { return mShaderRecordSize; }
 
 	// Pretty-print the shader records.
-	void DebugPrint(std::unordered_map<void*, std::wstring> shaderIdToStringMap)
+	void DebugPrint(std::unordered_map<void*, std::wstring> InShaderIdToStringMap)
 	{
 		std::wstringstream wstr;
 		wstr << L"|--------------------------------------------------------------------\n";
-		wstr << L"|Shader table - " << m_name.c_str() << L": "
-			<< m_shaderRecordSize << L" | "
-			<< m_shaderRecords.size() * m_shaderRecordSize << L" bytes\n";
+		wstr << L"|Shader table - " << mName.c_str() << L": "
+			<< mShaderRecordSize << L" | "
+			<< mShaderRecords.size() * mShaderRecordSize << L" bytes\n";
 
-		for (UINT i = 0; i < m_shaderRecords.size(); i++)
+		for (u32 i = 0; i < mShaderRecords.size(); i++)
 		{
 			wstr << L"| [" << i << L"]: ";
-			wstr << shaderIdToStringMap[m_shaderRecords[i].shaderIdentifier.ptr] << L", ";
-			wstr << m_shaderRecords[i].shaderIdentifier.size << L" + " << m_shaderRecords[i].localRootArguments.size << L" bytes \n";
+			wstr << InShaderIdToStringMap[mShaderRecords[i].mShaderIdentifier.ptr] << L", ";
+			wstr << mShaderRecords[i].mShaderIdentifier.size << L" + " << mShaderRecords[i].mLocalRootArguments.size << L" bytes \n";
 		}
 		wstr << L"|--------------------------------------------------------------------\n";
 		wstr << L"\n";
 		OutputDebugStringW(wstr.str().c_str());
 	}
+
+private:
+
+	u8* mMappedShaderRecords;
+
+	size_t mShaderRecordSize;
+
+	// Debug support
+	std::wstring mName;
+
+	std::vector<ShaderRecord> mShaderRecords;
+
+	ShaderTable() {}
+
 };
 
 
@@ -520,8 +548,9 @@ void Ray_DX12HardwareRenderer::BuildGeometry()
 	auto Device = mD3DDevice.Get();
 
 	// Loads vertices and indices from FBX file
+	// NOTE: this is not the right place to load a model. We need to provide mesh data here not load the model. A refactoring is needed.
 	SModel model;
-	FBXModelLoader::Get().Load((gAssetRootDir + "Cicada.fbx").c_str(), model);
+	FBXModelLoader::Get().Load((gAssetRootDir + "YachtBoat.fbx").c_str(), model);
 
 	// This helper functions creates a buffer resource of type committed and upload vertex and index data in each one of them
 	ComPtr<ID3D12Resource> VB;
@@ -546,7 +575,7 @@ void Ray_DX12HardwareRenderer::BuildGeometry()
 					, &IB);
 
 
-				// NOTE: Renderer "connection" happens here. We actually create the GPU resource needed to render geometry ///////
+				// NOTE: Renderer "connection" happens here. We actually create the GPU resource needed to render the geometry ///
 
 				// Build Render Packet with vertex/index buffer geometry 
 				RenderPacket RPacket;
@@ -588,40 +617,47 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 
 		bool Use32BitIndices = (RPacket.mVertexCount > 65536);
 
-		D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
-		geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-		geometryDesc.Triangles.IndexBuffer = RPacket.mIB->GetGPUVirtualAddress();
-		geometryDesc.Triangles.IndexCount = RPacket.mIndexCount;
-		geometryDesc.Triangles.IndexFormat = Use32BitIndices ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT;
-		geometryDesc.Triangles.Transform3x4 = 0;
-		geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-		geometryDesc.Triangles.VertexCount = RPacket.mVertexCount; 
-		geometryDesc.Triangles.VertexBuffer.StartAddress = RPacket.mVB->GetGPUVirtualAddress();
-		geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(MyVertex);
+		D3D12_RAYTRACING_GEOMETRY_DESC GeometryDesc = {};
+		GeometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+
+		// Index buffer related fields
+		GeometryDesc.Triangles.IndexBuffer = RPacket.mIB->GetGPUVirtualAddress();
+		GeometryDesc.Triangles.IndexCount = RPacket.mIndexCount;
+		GeometryDesc.Triangles.IndexFormat = Use32BitIndices ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT;		
+		
+		// Vertex buffer related fields
+		GeometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+		GeometryDesc.Triangles.VertexCount = RPacket.mVertexCount; 
+		GeometryDesc.Triangles.VertexBuffer.StartAddress = RPacket.mVB->GetGPUVirtualAddress();
+		GeometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(MyVertex);
+		
+		// We don't want to transform this geometry 
+		GeometryDesc.Triangles.Transform3x4 = 0;
 
 		// Mark the geometry as opaque. 
 		// PERFORMANCE TIP: mark geometry as opaque whenever applicable as it can enable important ray processing optimizations.
 		// Note: When rays encounter opaque geometry an any hit shader will not be executed whether it is present or not.
-		geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+		GeometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
 
 		// Store the geometry desc for this mesh
-		GeometryDescs.push_back(geometryDesc);
+		GeometryDescs.push_back(GeometryDesc);
 
 	}
 
 	// Get required sizes for an acceleration structure.
-	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS buildFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS TopLevelInputs = {};
-	TopLevelInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-	TopLevelInputs.Flags = buildFlags;
-	TopLevelInputs.NumDescs = 1;
-	TopLevelInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS BuildFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
 
+	// Top level acceleration structure inputs and prebuild infos
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS TopLevelInputs = {};	
+	TopLevelInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+	TopLevelInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+	TopLevelInputs.Flags = BuildFlags;
+	TopLevelInputs.NumDescs = 1;
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO TopLevelPrebuildInfo = {};
 	mD3DDevice->GetRaytracingAccelerationStructurePrebuildInfo(&TopLevelInputs, &TopLevelPrebuildInfo);
-
 	ThrowIfFalse(TopLevelPrebuildInfo.ResultDataMaxSizeInBytes > 0);
 
+	// Bottom level acceleration structure inputs and prebuild infos
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO BottomLevelPrebuildInfo = {};
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS BottomLevelInputs = TopLevelInputs;
 	BottomLevelInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
@@ -729,12 +765,13 @@ void Ray_DX12HardwareRenderer::BuildAccelerationStructures()
 // Build shader tables, which define shaders and their local root arguments.
 void Ray_DX12HardwareRenderer::BuildShaderTables()
 {
-	auto device = mD3DDevice.Get();
+	auto Device = mD3DDevice.Get();
 
 	void* RayGenShaderIdentifier;
 	void* MissShaderIdentifier;
 	void* HitGroupShaderIdentifier;
 
+	// Convenient lamda function to get the shader identifiers
 	auto GetShaderIdentifiers = [&](auto* stateObjectProperties)
 	{
 		RayGenShaderIdentifier = stateObjectProperties->GetShaderIdentifier(gRaygenShaderName);
@@ -743,46 +780,59 @@ void Ray_DX12HardwareRenderer::BuildShaderTables()
 	};
 
 	// Get shader identifiers.
-	u32 shaderIdentifierSize;
-
+    size_t ShaderIdentifierSize;
+	
 	ComPtr<ID3D12StateObjectPropertiesPrototype> stateObjectProperties;
+	
 	ThrowIfFailed(mDXRStateObject.As(&stateObjectProperties));
+	
 	GetShaderIdentifiers(stateObjectProperties.Get());
-	shaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+	
+	// Shader id size must be 32 bytes aligned
+	ShaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 	
 
 	// Ray gen shader table
 	{
-		struct RootArguments 
+		struct SRootArguments 
 		{
+			// Constant buffer for the ray generation shader 
 			RayGenCB cb;
-		} rootArguments;
+		} RootArguments;
 
-		rootArguments.cb = mRayGenCB;
+		RootArguments.cb = mRayGenCB;
 
-		u32 numShaderRecords = 1;
-		u32 shaderRecordSize = shaderIdentifierSize + sizeof(rootArguments);
-		ShaderTable rayGenShaderTable(device, numShaderRecords, shaderRecordSize, L"RayGenShaderTable");
-		rayGenShaderTable.push_back(ShaderRecord(RayGenShaderIdentifier, shaderIdentifierSize, &rootArguments, sizeof(rootArguments)));
-		mRayGenShaderTable = rayGenShaderTable.GetResource();
+		// How many records we want in the ray gen shader table
+		u32 NumShaderRecords = 1;
+
+		// What is the size of one record
+		u32 ShaderRecordSize = ShaderIdentifierSize + sizeof(RootArguments);
+		
+		ShaderTable RayGenShaderTable(Device, NumShaderRecords, ShaderRecordSize, L"RayGenShaderTable");
+		
+		// Add the newly created shader to the table (it will actually copy the record in the D3D12 upload buffer resource)
+		RayGenShaderTable.push_back(ShaderRecord(RayGenShaderIdentifier, ShaderIdentifierSize, &RootArguments, sizeof(RootArguments)));
+		
+		// Done, let's get our shader table actual D3D12 resource
+		mRayGenShaderTable = RayGenShaderTable.GetResource();
 	}
 
 	// Miss shader table
 	{
-		u32 numShaderRecords = 1;
-		u32 shaderRecordSize = shaderIdentifierSize;
-		ShaderTable missShaderTable(device, numShaderRecords, shaderRecordSize, L"MissShaderTable");
-		missShaderTable.push_back(ShaderRecord(MissShaderIdentifier, shaderIdentifierSize));
+		u32 NumShaderRecords = 1;
+		u32 shaderRecordSize = ShaderIdentifierSize;
+		ShaderTable missShaderTable(Device, NumShaderRecords, shaderRecordSize, L"MissShaderTable");
+		missShaderTable.push_back(ShaderRecord(MissShaderIdentifier, ShaderIdentifierSize));
 		mMissShaderTable = missShaderTable.GetResource();
 	}
 
 	// Hit group shader table
 	{
-		u32 numShaderRecords = 1;
-		u32 shaderRecordSize = shaderIdentifierSize;
-		ShaderTable hitGroupShaderTable(device, numShaderRecords, shaderRecordSize, L"HitGroupShaderTable");
-		hitGroupShaderTable.push_back(ShaderRecord(HitGroupShaderIdentifier, shaderIdentifierSize));
-		mHitGroupShaderTable = hitGroupShaderTable.GetResource();
+		u32 NumShaderRecords = 1;
+		u32 shaderRecordSize = ShaderIdentifierSize;
+		ShaderTable HitGroupShaderTable(Device, NumShaderRecords, shaderRecordSize, L"HitGroupShaderTable");
+		HitGroupShaderTable.push_back(ShaderRecord(HitGroupShaderIdentifier, ShaderIdentifierSize));
+		mHitGroupShaderTable = HitGroupShaderTable.GetResource();
 	}
 
 }
@@ -1325,7 +1375,7 @@ void Ray_DX12HardwareRenderer::BeginFrame(float* InClearColor)
 	// TODO: remove cbuffer update from here (must go in update section of the sample at most) ///
 	SceneConstants SceneCB = { };
 
-	SceneCB.CameraPosition = { -150.0f,150.0f,150.0f, 0.0f };
+	SceneCB.CameraPosition = { 0.0f,0.0f,0.0f, 0.0f };
 	//SceneCB.CameraPosition = { 0.0f,0.0f,2.0f, 0.0f };
 
 	memcpy(mSceneConstantsCB_DataPtr, &SceneCB, sizeof(SceneConstants));
@@ -1451,6 +1501,7 @@ void Ray_DX12HardwareRenderer::EndFrame()
 	// Wait for the  previous frame to finish
 	//WaitForPreviousFrame();
 
+	// Wait for one or more queued-up frames to finish and stall if and only if the currently processed frame hasn't reached the fence yet
 	MoveToNextFrame();
 }
 

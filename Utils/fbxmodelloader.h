@@ -291,33 +291,34 @@ private:
 			return;
 		}
 
-		switch (Attr->GetAttributeType()) {
-		case FbxNodeAttribute::eMesh:
+		switch (Attr->GetAttributeType()) 
 		{
-			// Triangulate Geometry
-			FbxGeometryConverter FbxConverter(Node->GetFbxManager());
-			FbxConverter.Triangulate(Node->GetNodeAttribute(), true);
-
-			FbxMesh* Mesh = Node->GetMesh();
-			if (Mesh != nullptr)
+			case FbxNodeAttribute::eMesh:
 			{
-				// Get the total number of materials
-				const size_t MaterialCount = Node->GetMaterialCount();
+				// Triangulate Geometry
+				FbxGeometryConverter FbxConverter(Node->GetFbxManager());
+				FbxConverter.Triangulate(Node->GetNodeAttribute(), true);
 
-				// Create our internal mesh
-				SMesh mesh;
+				FbxMesh* Mesh = Node->GetMesh();
+				if (Mesh != nullptr)
+				{
+					// Get the total number of materials
+					const size_t MaterialCount = Node->GetMaterialCount();
 
-				// We have as many mesh sections as are the total number of materials
-				mesh.mMeshSections.resize(MaterialCount);
+					// Create our internal mesh
+					SMesh mesh;
 
-				// We extract the data from the FBX
-				ExtractMeshDataCallback(Mesh, Node, mesh);
+					// We have as many mesh sections as are the total number of materials
+					mesh.mMeshSections.resize(MaterialCount);
 
-				// After we've created our internal mesh, we store it into our model struct 
-				OutModel.mMeshes.push_back(mesh);
+					// We extract the data from the FBX
+					ExtractMeshDataCallback(Mesh, Node, mesh);
+
+					// After we've created our internal mesh, we store it into our model struct 
+					OutModel.mMeshes.push_back(mesh);
+				}
 			}
-		}
-		break;
+			break;
 		default:
 			break;
 		}
