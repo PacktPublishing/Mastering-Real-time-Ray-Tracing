@@ -767,9 +767,10 @@ void Ray_DX12HardwareRenderer::BuildShaderTables()
 {
 	auto Device = mD3DDevice.Get();
 
-	void* RayGenShaderIdentifier;
-	void* MissShaderIdentifier;
-	void* HitGroupShaderIdentifier;
+	// Pointers to shader ids
+	void* RayGenShaderIdentifier = nullptr;
+	void* MissShaderIdentifier = nullptr;
+	void* HitGroupShaderIdentifier = nullptr;
 
 	// Convenient lamda function to get the shader identifiers
 	auto GetShaderIdentifiers = [&](auto* stateObjectProperties)
@@ -781,17 +782,19 @@ void Ray_DX12HardwareRenderer::BuildShaderTables()
 
 	// Get shader identifiers.
     size_t ShaderIdentifierSize;
+    
+	// state object properties prototype
+	ComPtr<ID3D12StateObjectPropertiesPrototype> StateObjectProperties;
 	
-	ComPtr<ID3D12StateObjectPropertiesPrototype> stateObjectProperties;
+	// DXR state object interpreted as State object prototype
+	ThrowIfFailed(mDXRStateObject.As(&StateObjectProperties));
 	
-	ThrowIfFailed(mDXRStateObject.As(&stateObjectProperties));
-	
-	GetShaderIdentifiers(stateObjectProperties.Get());
+
+	GetShaderIdentifiers(StateObjectProperties.Get());
 	
 	// Shader id size must be 32 bytes aligned
 	ShaderIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 	
-
 	// Ray gen shader table
 	{
 		struct SRootArguments 
@@ -813,7 +816,7 @@ void Ray_DX12HardwareRenderer::BuildShaderTables()
 		// Add the newly created shader to the table (it will actually copy the record in the D3D12 upload buffer resource)
 		RayGenShaderTable.push_back(ShaderRecord(RayGenShaderIdentifier, ShaderIdentifierSize, &RootArguments, sizeof(RootArguments)));
 		
-		// Done, let's get our shader table actual D3D12 resource
+		// Done, let's get our actual shader table D3D12 resource
 		mRayGenShaderTable = RayGenShaderTable.GetResource();
 	}
 
